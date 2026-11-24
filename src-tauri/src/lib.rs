@@ -49,6 +49,7 @@ async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, Stri
         os: state.os_name.clone(),
         ip,
         port: *state.port.read().await,
+        local_port: *state.local_port.read().await,
         save_dir: state.save_dir.read().await.to_string_lossy().to_string(),
         mobile_token: state.mobile_token.read().await.clone(),
         auto_accept: *state.auto_accept.read().await,
@@ -131,8 +132,11 @@ async fn send_files_to_peer(
     let shared_state = Arc::clone(&state);
 
     tauri::async_runtime::spawn(async move {
-        let client = reqwest::Client::new();
-        let base_url = format!("http://{}:{}", peer.ip, peer.port);
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let base_url = format!("https://{}:{}", peer.ip, peer.port);
 
         for raw_path in file_paths {
             let path = PathBuf::from(&raw_path);

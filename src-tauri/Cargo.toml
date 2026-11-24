@@ -27,3 +27,9 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 dirs = "6"
 zip = { version = "2", default-features = false }
+rcgen = "0.13"
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+hyper = "1"
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
+tower = "0.5"

@@ -13,6 +13,7 @@ export interface SelfInfo {
   os: string;
   ip: string;
   port: number;
+  local_port: number;
   save_dir: string;
   mobile_token: string;
   auto_accept: boolean;

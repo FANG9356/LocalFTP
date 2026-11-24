@@ -325,7 +325,7 @@ export default function App() {
   ).length;
 
   const mobileUrl = selfInfo
-    ? `http://${selfInfo.ip}:${selfInfo.port}/?t=${encodeURIComponent(selfInfo.mobile_token)}`
+    ? `https://${selfInfo.ip}:${selfInfo.port}/?t=${encodeURIComponent(selfInfo.mobile_token)}`
     : "";
 
   return (
@@ -765,7 +765,7 @@ export default function App() {
                   ) : (
                     sharedFiles.map((f) => {
                       const url = selfInfo
-                        ? `http://127.0.0.1:${selfInfo.port}/api/shared/${f.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
+                        ? `http://127.0.0.1:${selfInfo.local_port}/api/shared/${f.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
                         : null;
                       return (
                         <div
@@ -816,7 +816,7 @@ export default function App() {
                       .map((t) => {
                         const url =
                           selfInfo && t.save_path
-                            ? `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
+                            ? `http://127.0.0.1:${selfInfo.local_port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
                             : null;
                         return (
                           <div
@@ -882,7 +882,7 @@ export default function App() {
                         <div className="flex items-center gap-3 min-w-0">
                           {selfInfo && t.save_path && getPreviewKind(t.file_name) ? (
                             renderPreviewThumb(
-                              `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`,
+                              `http://127.0.0.1:${selfInfo.local_port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`,
                               t.file_name,
                               "h-9 w-9"
                             )

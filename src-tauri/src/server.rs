@@ -18,7 +18,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
+use tower::ServiceExt;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -41,17 +43,45 @@ async fn is_authorized(state: &Arc<AppState>, q: &BridgeQuery) -> bool {
 
 const DEFAULT_PORT: u16 = 53317;
 
+fn build_tls_acceptor(lan_ip: &str) -> Result<TlsAcceptor, String> {
+    let mut sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+    if !lan_ip.is_empty() && lan_ip != "127.0.0.1" {
+        sans.push(lan_ip.to_string());
+    }
+    let certified = rcgen::generate_simple_self_signed(sans).map_err(|e| e.to_string())?;
+    let cert_der = rustls::pki_types::CertificateDer::from(certified.cert.der().to_vec());
+    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+        rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()),
+    );
+    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| e.to_string())?
+    .with_no_client_auth()
+    .with_single_cert(vec![cert_der], key_der)
+    .map_err(|e| e.to_string())?;
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
 pub fn start_server(state: Arc<AppState>, app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let listener = match TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], DEFAULT_PORT))).await {
             Ok(l) => l,
             Err(_) => TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
                 .await
-                .expect("Failed to bind LocalFTP HTTP server"),
+                .expect("Failed to bind LocalFTP HTTPS server"),
         };
 
-        let local_port = listener.local_addr().map(|a| a.port()).unwrap_or(DEFAULT_PORT);
-        *state.port.write().await = local_port;
+        let local_loopback = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .expect("Failed to bind LocalFTP loopback server");
+
+        let tls_port = listener.local_addr().map(|a| a.port()).unwrap_or(DEFAULT_PORT);
+        let loopback_port = local_loopback.local_addr().map(|a| a.port()).unwrap_or(0);
+        *state.port.write().await = tls_port;
+        *state.local_port.write().await = loopback_port;
 
         let ctx = ServerContext { state, app };
 
@@ -70,8 +100,49 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
             .layer(DefaultBodyLimit::disable())
             .with_state(ctx);
 
-        if let Err(e) = axum::serve(listener, router).await {
-            eprintln!("LocalFTP HTTP server error: {}", e);
+        // Spawn loopback HTTP server strictly for desktop WKWebView local previews
+        let loopback_router = router.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = axum::serve(local_loopback, loopback_router).await {
+                eprintln!("LocalFTP loopback server error: {}", e);
+            }
+        });
+
+        let lan_ip = local_ip_address::local_ip()
+            .map(|i| i.to_string())
+            .unwrap_or_default();
+        let acceptor = match build_tls_acceptor(&lan_ip) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("Failed to initialize TLS certificate: {}", e);
+                return;
+            }
+        };
+
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                continue;
+            };
+            let acceptor = acceptor.clone();
+            let app_router = router.clone();
+            tauri::async_runtime::spawn(async move {
+                let Ok(tls_stream) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let io = hyper_util::rt::TokioIo::new(tls_stream);
+                let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                    let svc = app_router.clone();
+                    async move {
+                        let req = req.map(Body::new);
+                        svc.oneshot(req).await
+                    }
+                });
+                let _ = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection(io, service)
+                .await;
+            });
         }
     });
 }
@@ -88,6 +159,7 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
         os: ctx.state.os_name.clone(),
         ip,
         port: *ctx.state.port.read().await,
+        local_port: *ctx.state.local_port.read().await,
         save_dir: ctx.state.save_dir.read().await.to_string_lossy().to_string(),
         mobile_token,
         auto_accept,
