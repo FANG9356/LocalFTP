@@ -822,7 +822,7 @@ export default function App() {
                       top: `calc(50% + ${y}px)`,
                       transform: "translate(-50%, -50%)",
                     }}
-                    className="group absolute z-20 flex flex-col items-center w-28 transition-transform duration-200 hover:scale-105 cursor-pointer"
+                    className="group absolute z-20 flex flex-col items-center min-w-28 max-w-48 px-2 transition-transform duration-200 hover:scale-105 cursor-pointer"
                   >
                     <div
                       className={`h-12 w-12 rounded-full flex items-center justify-center mb-1.5 border shadow-md transition-transform group-hover:scale-105 ${
@@ -832,7 +832,7 @@ export default function App() {
                     >
                       <OsIcon os={peer.os} className="h-5 w-5" />
                     </div>
-                    <span className="text-[12px] font-semibold truncate w-full text-center">
+                    <span className="text-[12px] font-semibold text-center leading-tight break-words w-full">
                       {peer.name}
                     </span>
                     <span className={`text-[10px] ${subtleText}`}>{peer.os}</span>
