@@ -478,6 +478,40 @@ async fn set_save_dir(state: State<'_, Arc<AppState>>, path: String) -> Result<S
     Ok(path)
 }
 
+fn collect_watch_files_sync(base: &std::path::Path) -> Vec<(String, String, u64)> {
+    let mut out = Vec::new();
+    fn walk(
+        base: &std::path::Path,
+        current: &std::path::Path,
+        out: &mut Vec<(String, String, u64)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.is_empty() || name.starts_with('.') {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                walk(base, &path, out);
+            } else if meta.is_file() {
+                let rel_name = path
+                    .strip_prefix(base)
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| name.to_string());
+                out.push((path.to_string_lossy().to_string(), rel_name, meta.len()));
+            }
+        }
+    }
+    walk(base, base, &mut out);
+    out
+}
+
 async fn sync_watch_dir(state: &Arc<AppState>, app: &AppHandle) {
     let dir_opt = state.watch_dir.read().await.clone();
     let Some(dir) = dir_opt else {
@@ -492,29 +526,10 @@ async fn sync_watch_dir(state: &Arc<AppState>, app: &AppHandle) {
         return;
     };
 
-    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+    let Ok(disk_files) = tokio::task::spawn_blocking(move || collect_watch_files_sync(&dir)).await
+    else {
         return;
     };
-
-    let mut disk_files: Vec<(String, String, u64)> = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        let Ok(meta) = entry.metadata().await else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        if name.is_empty() || name.starts_with('.') {
-            continue;
-        }
-        disk_files.push((path.to_string_lossy().to_string(), name, meta.len()));
-    }
 
     let mut shared = state.shared_files.write().await;
     let mut changed = false;
