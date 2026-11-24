@@ -822,10 +822,12 @@ export default function App() {
                       top: `calc(50% + ${y}px)`,
                       transform: "translate(-50%, -50%)",
                     }}
-                    className={`group absolute z-20 flex flex-col items-center w-28 p-2.5 rounded-2xl transition-all duration-200 hover:scale-105 cursor-pointer ${glassCard}`}
+                    className="group absolute z-20 flex flex-col items-center w-28 transition-transform duration-200 hover:scale-105 cursor-pointer"
                   >
                     <div
-                      className="h-10 w-10 rounded-full flex items-center justify-center mb-1.5 transition-transform group-hover:scale-105"
+                      className={`h-12 w-12 rounded-full flex items-center justify-center mb-1.5 border shadow-md transition-transform group-hover:scale-105 ${
+                        isDark ? "border-white/15" : "border-black/10"
+                      }`}
                       style={{ background: accent.soft, color: accent.primary }}
                     >
                       <OsIcon os={peer.os} className="h-5 w-5" />
