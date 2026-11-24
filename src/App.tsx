@@ -857,45 +857,46 @@ export default function App() {
                 />
               </svg>
 
-              {peers.length === 0 ? (
-                <div className="relative z-10 flex flex-col items-center justify-center">
-                  <div
-                    className="h-16 w-16 rounded-full flex items-center justify-center"
-                    style={{ background: accent.soft, color: accent.primary }}
+              {/* Center Radar Pulse Icon (always centered) */}
+              <div className="relative z-10 flex flex-col items-center justify-center">
+                <div
+                  className="h-14 w-14 rounded-full flex items-center justify-center"
+                  style={{ background: accent.soft, color: accent.primary }}
+                >
+                  <Radio className="h-6 w-6 animate-pulse" strokeWidth={1.6} />
+                </div>
+              </div>
+
+              {/* Orbiting Peer Nodes around the radar ring */}
+              {peers.map((peer, idx) => {
+                const angle = -Math.PI / 2 + (idx * 2 * Math.PI) / peers.length;
+                const radius = peers.length <= 4 ? 136 : 150;
+                const x = Math.round(Math.cos(angle) * radius);
+                const y = Math.round(Math.sin(angle) * radius);
+                return (
+                  <button
+                    key={peer.id}
+                    onClick={() => pickFilesForPeer(peer)}
+                    style={{
+                      left: `calc(50% + ${x}px)`,
+                      top: `calc(50% + ${y}px)`,
+                      transform: "translate(-50%, -50%)",
+                    }}
+                    className={`group absolute z-20 flex flex-col items-center w-28 p-2.5 rounded-2xl transition-all duration-200 hover:scale-105 cursor-pointer ${glassCard}`}
                   >
-                    <Radio className="h-7 w-7 animate-pulse" strokeWidth={1.6} />
-                  </div>
-                </div>
-              ) : (
-                <div className="relative z-10 flex flex-wrap items-center justify-center gap-4 max-w-2xl">
-                  {peers.map((peer) => (
-                    <button
-                      key={peer.id}
-                      onClick={() => pickFilesForPeer(peer)}
-                      className={`group flex flex-col items-center w-36 p-4 rounded-2xl transition-all duration-200 hover:-translate-y-1 cursor-pointer ${glassCard}`}
+                    <div
+                      className="h-10 w-10 rounded-full flex items-center justify-center mb-1.5 transition-transform group-hover:scale-105"
+                      style={{ background: accent.soft, color: accent.primary }}
                     >
-                      <div
-                        className="h-12 w-12 rounded-2xl flex items-center justify-center mb-2.5 transition-transform group-hover:scale-105"
-                        style={{ background: accent.soft, color: accent.primary }}
-                      >
-                        <OsIcon os={peer.os} className="h-6 w-6" />
-                      </div>
-                      <span className="text-[13px] font-semibold truncate w-full text-center">
-                        {peer.name}
-                      </span>
-                      <span className={`text-[11px] mt-0.5 ${subtleText}`}>
-                        {peer.os}
-                      </span>
-                      <span
-                        className="mt-2 text-[10px] font-medium px-2 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                        style={{ background: accent.soft, color: accent.primary }}
-                      >
-                        Click to send
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
+                      <OsIcon os={peer.os} className="h-5 w-5" />
+                    </div>
+                    <span className="text-[12px] font-semibold truncate w-full text-center">
+                      {peer.name}
+                    </span>
+                    <span className={`text-[10px] ${subtleText}`}>{peer.os}</span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Self Identity Pill & Status */}
