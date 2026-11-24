@@ -185,8 +185,8 @@ export default function App() {
     : "bg-white/65 text-zinc-900 border-black/10";
 
   const glassCard = isDark
-    ? "bg-white/[0.06] border border-white/12 shadow-[0_8px_32px_rgba(0,0,0,0.28)]"
-    : "bg-white/70 border border-black/8 shadow-[0_8px_28px_rgba(0,0,0,0.06)]";
+    ? "bg-white/[0.06] border border-white/12 shadow-[0_8px_24px_rgba(0,0,0,0.22)]"
+    : "bg-white/75 border border-black/8 shadow-[0_8px_24px_rgba(0,0,0,0.06)]";
 
   const subtleText = isDark ? "text-zinc-400" : "text-zinc-500";
 
@@ -332,10 +332,12 @@ export default function App() {
     <div
       className={`relative h-screen w-screen flex flex-col overflow-hidden transition-colors duration-300 ${shellClass}`}
     >
-      {/* Ambient theme glow */}
+      {/* Ambient theme glow (radial-gradient avoids heavy GPU Gaussian blur on startup) */}
       <div
-        className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 h-64 w-[520px] rounded-full blur-3xl opacity-25 transition-colors duration-500"
-        style={{ background: accent.primary }}
+        className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 h-72 w-[560px] rounded-full opacity-25 transition-colors duration-500"
+        style={{
+          background: `radial-gradient(circle, ${accent.primary} 0%, transparent 70%)`,
+        }}
       />
 
       {/* macOS Overlay Titlebar */}
@@ -628,7 +630,7 @@ export default function App() {
               {peers.length === 0 ? (
                 <div className="relative z-10 flex flex-col items-center text-center max-w-xs">
                   <div
-                    className="h-16 w-16 rounded-2xl flex items-center justify-center mb-3 backdrop-blur-xl"
+                    className="h-16 w-16 rounded-2xl flex items-center justify-center mb-3"
                     style={{ background: accent.soft, color: accent.primary }}
                   >
                     <Radio className="h-7 w-7 animate-pulse" strokeWidth={1.6} />
@@ -645,7 +647,7 @@ export default function App() {
                     <button
                       key={peer.id}
                       onClick={() => pickFilesForPeer(peer)}
-                      className={`group flex flex-col items-center w-36 p-4 rounded-2xl backdrop-blur-xl transition-all duration-200 hover:-translate-y-1 cursor-pointer ${glassCard}`}
+                      className={`group flex flex-col items-center w-36 p-4 rounded-2xl transition-all duration-200 hover:-translate-y-1 cursor-pointer ${glassCard}`}
                     >
                       <div
                         className="h-12 w-12 rounded-2xl flex items-center justify-center mb-2.5 transition-transform group-hover:scale-105"

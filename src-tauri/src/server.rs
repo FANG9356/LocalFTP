@@ -82,6 +82,7 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
         let loopback_port = local_loopback.local_addr().map(|a| a.port()).unwrap_or(0);
         *state.port.write().await = tls_port;
         *state.local_port.write().await = loopback_port;
+        let _ = app.emit("self-updated", ());
 
         let ctx = ServerContext { state, app };
 
@@ -108,13 +109,21 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
             }
         });
 
-        let lan_ip = local_ip_address::local_ip()
-            .map(|i| i.to_string())
-            .unwrap_or_default();
-        let acceptor = match build_tls_acceptor(&lan_ip) {
-            Ok(a) => a,
-            Err(e) => {
+        let acceptor = match tokio::task::spawn_blocking(move || {
+            let lan_ip = local_ip_address::local_ip()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
+            build_tls_acceptor(&lan_ip)
+        })
+        .await
+        {
+            Ok(Ok(a)) => a,
+            Ok(Err(e)) => {
                 eprintln!("Failed to initialize TLS certificate: {}", e);
+                return;
+            }
+            Err(e) => {
+                eprintln!("TLS init task panicked: {}", e);
                 return;
             }
         };
