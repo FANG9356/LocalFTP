@@ -604,12 +604,20 @@ async fn mobile_portal_html(
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LocalFTP Mobile Bridge</title>
   <style>
+    * { box-sizing: border-box; }
     :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
-    body { margin: 0; padding: 24px 18px; background: #0f1115; color: #f4f4f5; max-width: 520px; margin-inline: auto; }
+    body { margin: 0; padding: 0; width: 100%; min-height: 100vh; background: #0f1115; color: #f4f4f5; }
     @media (prefers-color-scheme: light) { body { background: #f5f5f7; color: #18181b; } .card { background: #ffffff !important; border-color: rgba(0,0,0,0.08) !important; } }
+    .wrap { width: 100%; max-width: 560px; margin: 0 auto; padding: 22px 16px 36px; }
+    .grid { display: flex; flex-direction: column; gap: 16px; }
+    .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    @media (min-width: 768px) {
+      .wrap { max-width: 980px; padding: 32px 28px 44px; }
+      .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 20px; align-items: start; }
+    }
     h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.02em; }
     p.sub { font-size: 13px; opacity: 0.65; margin: 0 0 20px; }
-    .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+    .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; min-width: 0; }
     .label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin-bottom: 12px; }
     .btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 12px 16px; border-radius: 12px; border: none; background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
     .sent-badge { padding: 4px 10px; border-radius: 999px; background: rgba(16,185,129,0.16); color: #34d399; font-size: 11px; font-weight: 600; flex-shrink: 0; text-transform: capitalize; }
@@ -633,25 +641,33 @@ async fn mobile_portal_html(
   </style>
 </head>
 <body>
-  <h1 id="deviceTitle">LocalFTP</h1>
-  <p class="sub">Direct local transfer over Wi-Fi / Hotspot</p>
-  <div class="card">
-    <div class="label">Send to Computer</div>
-    <input id="picker" type="file" multiple style="display:none" />
-    <button class="btn" onclick="document.getElementById('picker').click()">Choose Photos or Files</button>
-    <div id="status"></div>
-  </div>
-  <div class="card">
-    <div class="label">Shared from Computer</div>
-    <div id="batchBar" class="batch-bar" style="display:none">
-      <button id="dlSelectedBtn" class="batch-btn" onclick="downloadSelected()" disabled>Download Selected</button>
-      <button id="dlAllBtn" class="batch-btn primary" onclick="downloadAll()">Download All</button>
+  <div class="wrap">
+    <h1 id="deviceTitle">LocalFTP</h1>
+    <p class="sub">Direct local transfer over Wi-Fi / Hotspot</p>
+    <div class="grid">
+      <div class="col">
+        <div class="card">
+          <div class="label">Send to Computer</div>
+          <input id="picker" type="file" multiple style="display:none" />
+          <button class="btn" onclick="document.getElementById('picker').click()">Choose Photos or Files</button>
+          <div id="status"></div>
+        </div>
+        <div class="card">
+          <div class="label">Sent to Computer</div>
+          <div id="sentList"><div style="font-size:13px;opacity:0.6">No files sent yet.</div></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <div class="label">Shared from Computer</div>
+          <div id="batchBar" class="batch-bar" style="display:none">
+            <button id="dlSelectedBtn" class="batch-btn" onclick="downloadSelected()" disabled>Download Selected</button>
+            <button id="dlAllBtn" class="batch-btn primary" onclick="downloadAll()">Download All</button>
+          </div>
+          <div id="sharedList"><div style="font-size:13px;opacity:0.6">Loading...</div></div>
+        </div>
+      </div>
     </div>
-    <div id="sharedList"><div style="font-size:13px;opacity:0.6">Loading...</div></div>
-  </div>
-  <div class="card">
-    <div class="label">Sent to Computer</div>
-    <div id="sentList"><div style="font-size:13px;opacity:0.6">No files sent yet.</div></div>
   </div>
   <div id="lightbox" onclick="this.style.display='none'"><img id="lightboxImg" alt="Preview" /></div>
   <script>
