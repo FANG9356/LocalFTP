@@ -16,6 +16,7 @@ export interface SelfInfo {
   port: number;
   local_port: number;
   save_dir: string;
+  watch_dir?: string | null;
   mobile_token: string;
   auto_accept: boolean;
   https_enabled: boolean;

@@ -139,6 +139,9 @@ export default function App() {
     const unlistenOffer = listen<TransferItem>("transfer-offer", (e) => {
       setPendingOffer(e.payload);
     });
+    const unlistenShared = listen<SharedFile[]>("shared-updated", (e) => {
+      setSharedFiles(e.payload);
+    });
     const unlistenSelf = listen("self-updated", async () => {
       const info = await invoke<SelfInfo>("get_self_info");
       setSelfInfo(info);
@@ -173,6 +176,7 @@ export default function App() {
       unlistenPeers.then((f) => f());
       unlistenTransfers.then((f) => f());
       unlistenOffer.then((f) => f());
+      unlistenShared.then((f) => f());
       unlistenSelf.then((f) => f());
       if (unlistenDrop) unlistenDrop();
     };
@@ -236,6 +240,17 @@ export default function App() {
       });
       setSharedFiles(updated);
     }
+  };
+
+  const handleChooseWatchDir = async () => {
+    const dir = await openDialog({ directory: true, multiple: false });
+    if (dir && typeof dir === "string") {
+      await invoke("set_watch_dir", { path: dir });
+    }
+  };
+
+  const handleClearWatchDir = async () => {
+    await invoke("set_watch_dir", { path: null });
   };
 
   const openFilePreview = async (url: string, name: string, kind: PreviewKind) => {
@@ -792,21 +807,57 @@ export default function App() {
             {/* Right: Shared & Received Files for Mobile */}
             <div className="flex flex-col gap-4 min-h-0">
               <div className={`flex-1 rounded-2xl p-5 flex flex-col min-h-0 backdrop-blur-xl ${glassCard}`}>
-                <div className="flex items-center justify-between mb-3">
-                  <div>
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="min-w-0">
                     <h3 className="text-[14px] font-semibold">Shared with Mobile</h3>
-                    <p className={`text-[11px] ${subtleText}`}>
-                      Drop files here to make them downloadable on your phone
+                    <p className={`text-[11px] truncate ${subtleText}`}>
+                      Drop files or watch a folder to auto-share
                     </p>
                   </div>
-                  <button
-                    onClick={pickFilesForMobile}
-                    className="px-3 py-1.5 rounded-xl text-[12px] font-medium text-white cursor-pointer"
-                    style={{ background: accent.primary }}
-                  >
-                    Add Files
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={handleChooseWatchDir}
+                      title="Watch Folder (Auto-Share)"
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[12px] font-medium cursor-pointer ${
+                        isDark
+                          ? "bg-white/10 hover:bg-white/16 text-zinc-100"
+                          : "bg-black/6 hover:bg-black/10 text-zinc-800"
+                      }`}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                      <span>Watch</span>
+                    </button>
+                    <button
+                      onClick={pickFilesForMobile}
+                      className="px-3 py-1.5 rounded-xl text-[12px] font-medium text-white cursor-pointer"
+                      style={{ background: accent.primary }}
+                    >
+                      Add Files
+                    </button>
+                  </div>
                 </div>
+
+                {selfInfo?.watch_dir && (
+                  <div
+                    className={`flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl mb-2.5 text-[11px] ${
+                      isDark ? "bg-white/[0.06]" : "bg-black/[0.05]"
+                    }`}
+                  >
+                    <span className="truncate">
+                      Auto-sharing:{" "}
+                      <span className="font-medium">
+                        {selfInfo.watch_dir.split(/[/\\]/).pop() || selfInfo.watch_dir}
+                      </span>
+                    </span>
+                    <button
+                      onClick={handleClearWatchDir}
+                      title="Stop watching folder"
+                      className="opacity-60 hover:opacity-100 cursor-pointer shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
 
                 <div className="flex-1 overflow-y-auto space-y-2 pr-1">
                   {sharedFiles.length === 0 ? (

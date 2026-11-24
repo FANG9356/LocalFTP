@@ -183,6 +183,13 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
         port: *ctx.state.port.read().await,
         local_port: *ctx.state.local_port.read().await,
         save_dir: ctx.state.save_dir.read().await.to_string_lossy().to_string(),
+        watch_dir: ctx
+            .state
+            .watch_dir
+            .read()
+            .await
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string()),
         mobile_token,
         auto_accept,
         https_enabled: ctx.state.https_enabled,

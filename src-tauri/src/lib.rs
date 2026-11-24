@@ -86,6 +86,12 @@ async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, Stri
         port: *state.port.read().await,
         local_port: *state.local_port.read().await,
         save_dir: state.save_dir.read().await.to_string_lossy().to_string(),
+        watch_dir: state
+            .watch_dir
+            .read()
+            .await
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string()),
         mobile_token: state.mobile_token.read().await.clone(),
         auto_accept: *state.auto_accept.read().await,
         https_enabled: state.https_enabled,
@@ -364,6 +370,7 @@ async fn share_files_for_mobile(
                     name,
                     size: meta.len(),
                     path: raw_path,
+                    from_watch: false,
                 });
             }
         }
@@ -393,6 +400,103 @@ async fn set_save_dir(state: State<'_, Arc<AppState>>, path: String) -> Result<S
         return Err("Selected path is not a directory".to_string());
     }
     *state.save_dir.write().await = pb;
+    Ok(path)
+}
+
+async fn sync_watch_dir(state: &Arc<AppState>, app: &AppHandle) {
+    let dir_opt = state.watch_dir.read().await.clone();
+    let Some(dir) = dir_opt else {
+        let mut shared = state.shared_files.write().await;
+        let before = shared.len();
+        shared.retain(|f| !f.from_watch);
+        if shared.len() != before {
+            let list = shared.clone();
+            drop(shared);
+            let _ = app.emit("shared-updated", list);
+        }
+        return;
+    };
+
+    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+        return;
+    };
+
+    let mut disk_files: Vec<(String, String, u64)> = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        disk_files.push((path.to_string_lossy().to_string(), name, meta.len()));
+    }
+
+    let mut shared = state.shared_files.write().await;
+    let mut changed = false;
+
+    let before_len = shared.len();
+    shared.retain(|f| {
+        if !f.from_watch {
+            return true;
+        }
+        disk_files.iter().any(|(p, _, _)| p == &f.path)
+    });
+    if shared.len() != before_len {
+        changed = true;
+    }
+
+    for (path_str, name, size) in disk_files {
+        if let Some(existing) = shared.iter_mut().find(|f| f.path == path_str) {
+            if existing.size != size {
+                existing.size = size;
+                changed = true;
+            }
+        } else {
+            shared.push(SharedFile {
+                id: Uuid::new_v4().to_string(),
+                name,
+                size,
+                path: path_str,
+                from_watch: true,
+            });
+            changed = true;
+        }
+    }
+
+    if changed {
+        let list = shared.clone();
+        drop(shared);
+        let _ = app.emit("shared-updated", list);
+    }
+}
+
+#[tauri::command]
+async fn set_watch_dir(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    path: Option<String>,
+) -> Result<Option<String>, String> {
+    if let Some(ref p) = path {
+        let pb = PathBuf::from(p);
+        if !pb.is_dir() {
+            return Err("Selected path is not a directory".to_string());
+        }
+        *state.watch_dir.write().await = Some(pb);
+    } else {
+        *state.watch_dir.write().await = None;
+    }
+    sync_watch_dir(&state, &app).await;
+    let _ = app.emit("self-updated", ());
     Ok(path)
 }
 
@@ -440,6 +544,14 @@ pub fn run() {
                 let _ = win.set_focus();
             }
             let handle = app.handle().clone();
+            let watch_state = Arc::clone(&state_for_setup);
+            let watch_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    sync_watch_dir(&watch_state, &watch_handle).await;
+                }
+            });
             server::start_server(Arc::clone(&state_for_setup), handle.clone());
             discovery::start_discovery(Arc::clone(&state_for_setup), handle);
             Ok(())
@@ -457,6 +569,7 @@ pub fn run() {
             remove_shared_file,
             get_shared_files,
             set_save_dir,
+            set_watch_dir,
             set_device_name,
         ])
         .run(tauri::generate_context!())

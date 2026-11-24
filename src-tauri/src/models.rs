@@ -24,6 +24,7 @@ pub struct SelfInfo {
     pub port: u16,
     pub local_port: u16,
     pub save_dir: String,
+    pub watch_dir: Option<String>,
     pub mobile_token: String,
     pub auto_accept: bool,
     pub https_enabled: bool,
@@ -66,6 +67,8 @@ pub struct SharedFile {
     pub name: String,
     pub size: u64,
     pub path: String,
+    #[serde(default)]
+    pub from_watch: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +91,7 @@ pub struct AppState {
     pub port: RwLock<u16>,
     pub local_port: RwLock<u16>,
     pub save_dir: RwLock<PathBuf>,
+    pub watch_dir: RwLock<Option<PathBuf>>,
     pub mobile_token: RwLock<String>,
     pub auto_accept: RwLock<bool>,
     pub https_enabled: bool,
@@ -120,6 +124,7 @@ impl AppState {
             port: RwLock::new(0),
             local_port: RwLock::new(0),
             save_dir: RwLock::new(save_dir),
+            watch_dir: RwLock::new(None),
             mobile_token: RwLock::new(mobile_token),
             auto_accept: RwLock::new(false),
             https_enabled,
