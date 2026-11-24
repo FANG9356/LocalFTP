@@ -95,6 +95,23 @@ async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, Stri
 #[tauri::command]
 async fn set_https_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
     save_https_setting(enabled)?;
+    #[cfg(target_os = "macos")]
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(app_bundle) = exe
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+        {
+            if app_bundle.extension().and_then(|e| e.to_str()) == Some("app") {
+                let _ = std::process::Command::new("open")
+                    .arg("-n")
+                    .arg(app_bundle)
+                    .spawn();
+                app.exit(0);
+                return Ok(());
+            }
+        }
+    }
     app.restart();
 }
 
