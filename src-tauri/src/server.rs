@@ -609,12 +609,13 @@ async fn mobile_portal_html(
     body { margin: 0; padding: 0; width: 100%; min-height: 100vh; background: #0f1115; color: #f4f4f5; }
     @media (prefers-color-scheme: light) { body { background: #f5f5f7; color: #18181b; } .card { background: #ffffff !important; border-color: rgba(0,0,0,0.08) !important; } }
     .wrap { width: 100%; max-width: 560px; margin: 0 auto; padding: 22px 16px 36px; }
-    .grid { display: flex; flex-direction: column; gap: 16px; }
-    .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .grid { display: flex; flex-direction: column; gap: 18px; }
+    .col { display: flex; flex-direction: column; min-width: 0; }
+    .col > .card + .card { margin-top: 20px; }
     @media (min-width: 768px) {
       .wrap { max-width: 1000px; padding: 34px 30px 48px; }
       .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 28px; align-items: start; }
-      .col { gap: 24px; }
+      .col > .card + .card { margin-top: 28px; }
     }
     h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.02em; }
     p.sub { font-size: 13px; opacity: 0.65; margin: 0 0 20px; }
