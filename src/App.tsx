@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -112,9 +111,6 @@ export default function App() {
   }, [accentId]);
 
   useEffect(() => {
-    requestAnimationFrame(() => {
-      getCurrentWindow().show().catch(() => {});
-    });
     const loadInitial = async () => {
       try {
         const [info, initialPeers, initialTransfers, initialShared] = await Promise.all([
