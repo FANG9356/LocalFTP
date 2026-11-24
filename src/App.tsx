@@ -598,7 +598,7 @@ export default function App() {
                   isDark ? "bg-white/8 text-zinc-200" : "bg-black/5 text-zinc-700"
                 }`}
               >
-                {selfInfo ? `Bridge ${formatNodeCode(selfInfo.id)} • Ready to scan` : "Starting bridge..."}
+                {selfInfo ? `Bridge ${formatNodeCode(selfInfo.id)}` : "Starting bridge..."}
               </div>
             </div>
 
@@ -690,13 +690,13 @@ export default function App() {
                   <span className={`text-[11px] ${subtleText}`}>Saved to Downloads</span>
                 </div>
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                  {transfers.filter((t) => t.peer_name === "Mobile Browser").length === 0 ? (
+                  {transfers.filter((t) => t.peer_ip === "mobile" || t.peer_name === "Mobile Browser").length === 0 ? (
                     <div className={`text-[12px] py-3 text-center ${subtleText}`}>
                       Files sent from your phone will appear here
                     </div>
                   ) : (
                     transfers
-                      .filter((t) => t.peer_name === "Mobile Browser")
+                      .filter((t) => t.peer_ip === "mobile" || t.peer_name === "Mobile Browser")
                       .map((t) => {
                         const thumbUrl =
                           selfInfo && t.save_path && isImageFile(t.file_name)
