@@ -39,10 +39,17 @@ impl<R: AsyncRead + Unpin> AsyncRead for ProgressReader<R> {
 }
 
 fn settings_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("localftp")
-        .join("settings.json")
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            if exe_dir.file_name().and_then(|n| n.to_str()) == Some("MacOS") {
+                if let Some(contents_dir) = exe_dir.parent() {
+                    return contents_dir.join("Resources").join("settings.json");
+                }
+            }
+            return exe_dir.join("settings.json");
+        }
+    }
+    PathBuf::from("settings.json")
 }
 
 fn load_https_setting() -> bool {
