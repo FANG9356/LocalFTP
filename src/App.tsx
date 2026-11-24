@@ -26,7 +26,6 @@ import {
   Sun,
   Trash2,
   Upload,
-  Wifi,
   X,
 } from "lucide-react";
 import { ACCENT_THEMES, formatBytes } from "./themes";
@@ -96,7 +95,6 @@ export default function App() {
 
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showConnectIp, setShowConnectIp] = useState(false);
   const [manualIp, setManualIp] = useState("");
   const [connectError, setConnectError] = useState("");
   const [editingName, setEditingName] = useState("");
@@ -348,7 +346,7 @@ export default function App() {
     try {
       await invoke("connect_peer_by_ip", { ip: manualIp.trim() });
       setManualIp("");
-      setShowConnectIp(false);
+      setShowSettings(false);
     } catch (err) {
       setConnectError(String(err));
     }
@@ -579,6 +577,39 @@ export default function App() {
                     />
                   </button>
                 </div>
+                <div className={`pt-2 border-t ${isDark ? "border-white/10" : "border-black/8"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className={`text-[11px] font-medium ${subtleText}`}>
+                      Connect by IP
+                    </label>
+                    <span className={`text-[10px] font-mono ${subtleText}`}>
+                      {selfInfo?.ip}:{selfInfo?.port}
+                    </span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={manualIp}
+                      onChange={(e) => setManualIp(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleConnectByIp()}
+                      placeholder="192.168.x.x"
+                      className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] outline-none border ${
+                        isDark
+                          ? "bg-white/8 border-white/12 text-white"
+                          : "bg-white/80 border-black/10 text-zinc-900"
+                      }`}
+                    />
+                    <button
+                      onClick={handleConnectByIp}
+                      className="px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-white cursor-pointer"
+                      style={{ background: accent.primary }}
+                    >
+                      Connect
+                    </button>
+                  </div>
+                  {connectError && (
+                    <div className="mt-1.5 text-[10px] text-rose-400">{connectError}</div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -718,6 +749,39 @@ export default function App() {
                     />
                   </button>
                 </div>
+                <div className={`pt-2 border-t ${isDark ? "border-white/10" : "border-black/8"}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className={`text-[11px] font-medium ${subtleText}`}>
+                      Connect by IP
+                    </label>
+                    <span className={`text-[10px] font-mono ${subtleText}`}>
+                      {selfInfo?.ip}:{selfInfo?.port}
+                    </span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={manualIp}
+                      onChange={(e) => setManualIp(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleConnectByIp()}
+                      placeholder="192.168.x.x"
+                      className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] outline-none border ${
+                        isDark
+                          ? "bg-white/8 border-white/12 text-white"
+                          : "bg-white/80 border-black/10 text-zinc-900"
+                      }`}
+                    />
+                    <button
+                      onClick={handleConnectByIp}
+                      className="px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-white cursor-pointer"
+                      style={{ background: accent.primary }}
+                    >
+                      Connect
+                    </button>
+                  </div>
+                  {connectError && (
+                    <div className="mt-1.5 text-[10px] text-rose-400">{connectError}</div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -737,36 +801,6 @@ export default function App() {
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={handleToggleStandalone}
-                  title="Standalone Hotspot / Sharing Mode"
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-colors cursor-pointer ${
-                    selfInfo?.standalone_mode
-                      ? "text-white"
-                      : isDark
-                      ? "bg-white/10 hover:bg-white/16 text-zinc-100"
-                      : "bg-black/6 hover:bg-black/10 text-zinc-800"
-                  }`}
-                  style={
-                    selfInfo?.standalone_mode ? { background: accent.primary } : undefined
-                  }
-                >
-                  <Wifi className="h-3.5 w-3.5" />
-                  <span>Standalone</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setConnectError("");
-                    setShowConnectIp(true);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-transform active:scale-95 cursor-pointer ${
-                    isDark
-                      ? "bg-white/10 hover:bg-white/16 text-zinc-100"
-                      : "bg-black/6 hover:bg-black/10 text-zinc-800"
-                  }`}
-                >
-                  <span>Connect IP</span>
-                </button>
                 <button
                   onClick={pickFolderGeneral}
                   className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-transform active:scale-95 cursor-pointer ${
@@ -1192,55 +1226,6 @@ export default function App() {
                 ? "Release to share via Mobile QR"
                 : "Release to choose a nearby device"}
             </p>
-          </div>
-        </div>
-      )}
-
-      {/* Connect by IP Modal */}
-      {showConnectIp && (
-        <div
-          onClick={() => setShowConnectIp(false)}
-          className="absolute inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm p-6"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-sm rounded-2xl p-5 backdrop-blur-2xl ${glassCard}`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-[15px] font-semibold">Connect by IP</h3>
-              <button
-                onClick={() => setShowConnectIp(false)}
-                className="opacity-60 hover:opacity-100 cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <p className={`text-[11px] mb-3 ${subtleText}`}>
-              Your IP: <span className="font-mono font-semibold">{selfInfo?.ip}:{selfInfo?.port}</span>
-            </p>
-            <div className="flex gap-2">
-              <input
-                value={manualIp}
-                onChange={(e) => setManualIp(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleConnectByIp()}
-                placeholder="Enter peer IP (e.g. 192.168.137.1)"
-                className={`flex-1 px-3 py-2 rounded-xl text-[12px] outline-none border ${
-                  isDark
-                    ? "bg-white/8 border-white/12 text-white"
-                    : "bg-white/85 border-black/10 text-zinc-900"
-                }`}
-              />
-              <button
-                onClick={handleConnectByIp}
-                className="px-3.5 py-2 rounded-xl text-[12px] font-semibold text-white cursor-pointer"
-                style={{ background: accent.primary }}
-              >
-                Connect
-              </button>
-            </div>
-            {connectError && (
-              <div className="mt-2.5 text-[11px] text-rose-400">{connectError}</div>
-            )}
           </div>
         </div>
       )}
