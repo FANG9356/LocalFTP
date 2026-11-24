@@ -1,0 +1,434 @@
+use crate::models::{
+    AppState, OfferRequest, OfferResponse, SelfInfo, SharedFile, TransferDirection, TransferItem,
+    TransferStatus,
+};
+use axum::{
+    body::Body,
+    extract::{DefaultBodyLimit, Multipart, Path, State},
+    http::{header, StatusCode},
+    response::{Html, IntoResponse, Json},
+    routing::{get, post},
+    Router,
+};
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
+use tokio_util::io::ReaderStream;
+use uuid::Uuid;
+
+#[derive(Clone)]
+struct ServerContext {
+    state: Arc<AppState>,
+    app: AppHandle,
+}
+
+const DEFAULT_PORT: u16 = 53317;
+
+pub fn start_server(state: Arc<AppState>, app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let listener = match TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], DEFAULT_PORT))).await {
+            Ok(l) => l,
+            Err(_) => TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0)))
+                .await
+                .expect("Failed to bind LocalFTP HTTP server"),
+        };
+
+        let local_port = listener.local_addr().map(|a| a.port()).unwrap_or(DEFAULT_PORT);
+        *state.port.write().await = local_port;
+
+        let ctx = ServerContext { state, app };
+
+        let router = Router::new()
+            .route("/", get(mobile_portal_html))
+            .route("/api/info", get(get_info))
+            .route("/api/offer", post(handle_offer))
+            .route("/api/upload/{transfer_id}", post(handle_upload))
+            .route("/api/shared", get(list_shared))
+            .route("/api/shared/{file_id}/download", get(download_shared))
+            .route("/api/mobile-upload", post(handle_mobile_upload))
+            .layer(DefaultBodyLimit::disable())
+            .with_state(ctx);
+
+        if let Err(e) = axum::serve(listener, router).await {
+            eprintln!("LocalFTP HTTP server error: {}", e);
+        }
+    });
+}
+
+async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
+    let ip = local_ip_address::local_ip()
+        .map(|i| i.to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    Json(SelfInfo {
+        id: ctx.state.self_id.clone(),
+        name: ctx.state.device_name.read().await.clone(),
+        os: ctx.state.os_name.clone(),
+        ip,
+        port: *ctx.state.port.read().await,
+        save_dir: ctx.state.save_dir.read().await.to_string_lossy().to_string(),
+    })
+}
+
+async fn handle_offer(
+    State(ctx): State<ServerContext>,
+    Json(req): Json<OfferRequest>,
+) -> Json<OfferResponse> {
+    let (tx, rx) = oneshot::channel::<bool>();
+
+    let item = TransferItem {
+        id: req.transfer_id.clone(),
+        file_name: req.file_name.clone(),
+        file_size: req.file_size,
+        bytes_transferred: 0,
+        peer_name: req.sender_name.clone(),
+        peer_ip: String::new(),
+        direction: TransferDirection::Incoming,
+        status: TransferStatus::Pending,
+        save_path: None,
+        error: None,
+    };
+
+    {
+        let mut transfers = ctx.state.transfers.write().await;
+        transfers.insert(0, item.clone());
+    }
+    {
+        let mut pending = ctx.state.pending_approvals.write().await;
+        pending.insert(req.transfer_id.clone(), tx);
+    }
+
+    let _ = ctx.app.emit("transfer-offer", &item);
+    emit_transfers(&ctx.state, &ctx.app).await;
+
+    let accepted = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or(false);
+
+    if !accepted {
+        let mut pending = ctx.state.pending_approvals.write().await;
+        pending.remove(&req.transfer_id);
+        update_transfer_status(&ctx.state, &req.transfer_id, TransferStatus::Rejected, None).await;
+        emit_transfers(&ctx.state, &ctx.app).await;
+    }
+
+    Json(OfferResponse { accepted })
+}
+
+async fn handle_upload(
+    State(ctx): State<ServerContext>,
+    Path(transfer_id): Path<String>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let save_dir = ctx.state.save_dir.read().await.clone();
+
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        let raw_name = field
+            .file_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("file-{}", transfer_id));
+        let dest_path = unique_save_path(&save_dir, &raw_name);
+
+        let mut file = match tokio::fs::File::create(&dest_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                update_transfer_status(
+                    &ctx.state,
+                    &transfer_id,
+                    TransferStatus::Failed,
+                    Some(e.to_string()),
+                )
+                .await;
+                emit_transfers(&ctx.state, &ctx.app).await;
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+        };
+
+        update_transfer_status(&ctx.state, &transfer_id, TransferStatus::Transferring, None).await;
+
+        let mut written: u64 = 0;
+        let mut last_emit = std::time::Instant::now();
+
+        while let Ok(Some(chunk)) = field.chunk().await {
+            if let Err(e) = file.write_all(&chunk).await {
+                update_transfer_status(
+                    &ctx.state,
+                    &transfer_id,
+                    TransferStatus::Failed,
+                    Some(e.to_string()),
+                )
+                .await;
+                emit_transfers(&ctx.state, &ctx.app).await;
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+            written += chunk.len() as u64;
+
+            if last_emit.elapsed().as_millis() >= 120 {
+                update_transfer_progress(&ctx.state, &transfer_id, written).await;
+                emit_transfers(&ctx.state, &ctx.app).await;
+                last_emit = std::time::Instant::now();
+            }
+        }
+
+        let _ = file.flush().await;
+        {
+            let mut transfers = ctx.state.transfers.write().await;
+            if let Some(t) = transfers.iter_mut().find(|t| t.id == transfer_id) {
+                t.bytes_transferred = written;
+                t.status = TransferStatus::Completed;
+                t.save_path = Some(dest_path.to_string_lossy().to_string());
+            }
+        }
+        emit_transfers(&ctx.state, &ctx.app).await;
+        return (StatusCode::OK, "OK".to_string());
+    }
+
+    (StatusCode::BAD_REQUEST, "No file field provided".to_string())
+}
+
+async fn list_shared(State(ctx): State<ServerContext>) -> Json<Vec<SharedFile>> {
+    let files = ctx.state.shared_files.read().await.clone();
+    Json(files)
+}
+
+async fn download_shared(
+    State(ctx): State<ServerContext>,
+    Path(file_id): Path<String>,
+) -> impl IntoResponse {
+    let shared = {
+        let files = ctx.state.shared_files.read().await;
+        files.iter().find(|f| f.id == file_id).cloned()
+    };
+
+    let Some(shared_file) = shared else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    };
+
+    match tokio::fs::File::open(&shared_file.path).await {
+        Ok(file) => {
+            let stream = ReaderStream::new(file);
+            let body = Body::from_stream(stream);
+            let disposition = format!("attachment; filename=\"{}\"", shared_file.name.replace('"', "_"));
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                    (header::CONTENT_DISPOSITION, disposition),
+                ],
+                body,
+            )
+                .into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Cannot open file").into_response(),
+    }
+}
+
+async fn handle_mobile_upload(
+    State(ctx): State<ServerContext>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let save_dir = ctx.state.save_dir.read().await.clone();
+    let mut saved_count = 0usize;
+
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        let raw_name = field
+            .file_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("mobile-upload-{}", Uuid::new_v4()));
+        let dest_path = unique_save_path(&save_dir, &raw_name);
+        let transfer_id = Uuid::new_v4().to_string();
+
+        let item = TransferItem {
+            id: transfer_id.clone(),
+            file_name: raw_name.clone(),
+            file_size: 0,
+            bytes_transferred: 0,
+            peer_name: "Mobile Browser".to_string(),
+            peer_ip: String::new(),
+            direction: TransferDirection::Incoming,
+            status: TransferStatus::Transferring,
+            save_path: None,
+            error: None,
+        };
+
+        {
+            let mut transfers = ctx.state.transfers.write().await;
+            transfers.insert(0, item);
+        }
+        emit_transfers(&ctx.state, &ctx.app).await;
+
+        let mut file = match tokio::fs::File::create(&dest_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                update_transfer_status(
+                    &ctx.state,
+                    &transfer_id,
+                    TransferStatus::Failed,
+                    Some(e.to_string()),
+                )
+                .await;
+                emit_transfers(&ctx.state, &ctx.app).await;
+                continue;
+            }
+        };
+
+        let mut written: u64 = 0;
+        while let Ok(Some(chunk)) = field.chunk().await {
+            if file.write_all(&chunk).await.is_err() {
+                break;
+            }
+            written += chunk.len() as u64;
+        }
+        let _ = file.flush().await;
+
+        {
+            let mut transfers = ctx.state.transfers.write().await;
+            if let Some(t) = transfers.iter_mut().find(|t| t.id == transfer_id) {
+                t.file_size = written;
+                t.bytes_transferred = written;
+                t.status = TransferStatus::Completed;
+                t.save_path = Some(dest_path.to_string_lossy().to_string());
+            }
+        }
+        emit_transfers(&ctx.state, &ctx.app).await;
+        saved_count += 1;
+    }
+
+    if saved_count > 0 {
+        (StatusCode::OK, format!("Uploaded {} file(s)", saved_count))
+    } else {
+        (StatusCode::BAD_REQUEST, "No files uploaded".to_string())
+    }
+}
+
+fn unique_save_path(dir: &PathBuf, raw_name: &str) -> PathBuf {
+    let safe_name = std::path::Path::new(raw_name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("received-file");
+
+    let candidate = dir.join(safe_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let stem = std::path::Path::new(safe_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let ext = std::path::Path::new(safe_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{}", e))
+        .unwrap_or_default();
+
+    for i in 1..1000 {
+        let numbered = dir.join(format!("{} ({}){}", stem, i, ext));
+        if !numbered.exists() {
+            return numbered;
+        }
+    }
+    dir.join(format!("{}-{}{}", stem, Uuid::new_v4(), ext))
+}
+
+async fn update_transfer_progress(state: &Arc<AppState>, id: &str, bytes: u64) {
+    let mut transfers = state.transfers.write().await;
+    if let Some(t) = transfers.iter_mut().find(|t| t.id == id) {
+        t.bytes_transferred = bytes;
+    }
+}
+
+async fn update_transfer_status(
+    state: &Arc<AppState>,
+    id: &str,
+    status: TransferStatus,
+    error: Option<String>,
+) {
+    let mut transfers = state.transfers.write().await;
+    if let Some(t) = transfers.iter_mut().find(|t| t.id == id) {
+        t.status = status;
+        if let Some(err) = error {
+            t.error = Some(err);
+        }
+    }
+}
+
+pub async fn emit_transfers(state: &Arc<AppState>, app: &AppHandle) {
+    let list = state.transfers.read().await.clone();
+    let _ = app.emit("transfers-updated", list);
+}
+
+async fn mobile_portal_html() -> Html<&'static str> {
+    Html(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LocalFTP Mobile Bridge</title>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+    body { margin: 0; padding: 24px 18px; background: #0f1115; color: #f4f4f5; max-width: 520px; margin-inline: auto; }
+    @media (prefers-color-scheme: light) { body { background: #f5f5f7; color: #18181b; } .card { background: #ffffff !important; border-color: rgba(0,0,0,0.08) !important; } }
+    h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.02em; }
+    p.sub { font-size: 13px; opacity: 0.65; margin: 0 0 20px; }
+    .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+    .label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin-bottom: 12px; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 12px 16px; border-radius: 12px; border: none; background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+    .file-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,0.15); gap: 12px; }
+    .file-row:last-child { border-bottom: none; }
+    .file-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-size { font-size: 12px; opacity: 0.6; }
+    .dl { padding: 7px 14px; border-radius: 9px; background: rgba(59,130,246,0.16); color: #60a5fa; text-decoration: none; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+    #status { font-size: 13px; margin-top: 10px; opacity: 0.8; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1 id="deviceTitle">LocalFTP</h1>
+  <p class="sub">Direct local transfer over Wi-Fi / Hotspot</p>
+  <div class="card">
+    <div class="label">Send to Computer</div>
+    <input id="picker" type="file" multiple style="display:none" />
+    <button class="btn" onclick="document.getElementById('picker').click()">Choose Photos or Files</button>
+    <div id="status"></div>
+  </div>
+  <div class="card">
+    <div class="label">Shared from Computer</div>
+    <div id="sharedList"><div style="font-size:13px;opacity:0.6">Loading...</div></div>
+  </div>
+  <script>
+    const fmt = b => b < 1024 ? b + ' B' : b < 1048576 ? (b/1024).toFixed(1) + ' KB' : (b/1048576).toFixed(1) + ' MB';
+    fetch('/api/info').then(r => r.json()).then(d => {
+      document.getElementById('deviceTitle').textContent = 'LocalFTP — ' + d.name;
+    }).catch(() => {});
+    async function loadShared() {
+      const res = await fetch('/api/shared');
+      const items = await res.json();
+      const box = document.getElementById('sharedList');
+      if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files shared yet.</div>'; return; }
+      box.innerHTML = items.map(f =>
+        `<div class="file-row"><div><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div><a class="dl" href="/api/shared/${f.id}/download">Download</a></div>`
+      ).join('');
+    }
+    loadShared();
+    document.getElementById('picker').addEventListener('change', async (e) => {
+      const files = e.target.files;
+      if (!files.length) return;
+      const status = document.getElementById('status');
+      status.textContent = 'Uploading ' + files.length + ' file(s)...';
+      const fd = new FormData();
+      for (const f of files) fd.append('file', f, f.name);
+      const res = await fetch('/api/mobile-upload', { method: 'POST', body: fd });
+      status.textContent = res.ok ? 'Sent successfully!' : 'Upload failed';
+      e.target.value = '';
+    });
+  </script>
+</body>
+</html>"#,
+    )
+}

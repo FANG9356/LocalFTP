@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Frontend build
+dist/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# macOS / Editor
+.DS_Store
+*.log
