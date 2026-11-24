@@ -49,6 +49,7 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
             .route("/api/upload/{transfer_id}", post(handle_upload))
             .route("/api/shared", get(list_shared))
             .route("/api/shared/{file_id}/download", get(download_shared))
+            .route("/api/shared/{file_id}/preview", get(preview_shared))
             .route("/api/mobile-upload", post(handle_mobile_upload))
             .layer(DefaultBodyLimit::disable())
             .with_state(ctx);
@@ -228,6 +229,58 @@ async fn download_shared(
     }
 }
 
+fn content_type_for_name(name: &str) -> &'static str {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+}
+
+async fn preview_shared(
+    State(ctx): State<ServerContext>,
+    Path(file_id): Path<String>,
+) -> impl IntoResponse {
+    let shared = {
+        let files = ctx.state.shared_files.read().await;
+        files.iter().find(|f| f.id == file_id).cloned()
+    };
+
+    let Some(shared_file) = shared else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    };
+
+    match tokio::fs::File::open(&shared_file.path).await {
+        Ok(file) => {
+            let stream = ReaderStream::new(file);
+            let body = Body::from_stream(stream);
+            let mime = content_type_for_name(&shared_file.name);
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, mime.to_string()),
+                    (header::CONTENT_DISPOSITION, "inline".to_string()),
+                ],
+                body,
+            )
+                .into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Cannot open file").into_response(),
+    }
+}
+
 async fn handle_mobile_upload(
     State(ctx): State<ServerContext>,
     mut multipart: Multipart,
@@ -286,6 +339,7 @@ async fn handle_mobile_upload(
         }
         let _ = file.flush().await;
 
+        let mut completed_item: Option<TransferItem> = None;
         {
             let mut transfers = ctx.state.transfers.write().await;
             if let Some(t) = transfers.iter_mut().find(|t| t.id == transfer_id) {
@@ -293,7 +347,11 @@ async fn handle_mobile_upload(
                 t.bytes_transferred = written;
                 t.status = TransferStatus::Completed;
                 t.save_path = Some(dest_path.to_string_lossy().to_string());
+                completed_item = Some(t.clone());
             }
+        }
+        if let Some(done) = completed_item {
+            let _ = ctx.app.emit("mobile-received", &done);
         }
         emit_transfers(&ctx.state, &ctx.app).await;
         saved_count += 1;
@@ -382,10 +440,16 @@ async fn mobile_portal_html() -> Html<&'static str> {
     .btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 12px 16px; border-radius: 12px; border: none; background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
     .file-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,0.15); gap: 12px; }
     .file-row:last-child { border-bottom: none; }
+    .file-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+    .thumb { width: 50px; height: 50px; border-radius: 10px; object-fit: cover; flex-shrink: 0; background: rgba(128,128,128,0.15); cursor: pointer; }
+    .ext-badge { width: 50px; height: 50px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; background: rgba(59,130,246,0.14); color: #60a5fa; flex-shrink: 0; }
+    .file-meta { min-width: 0; }
     .file-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-size { font-size: 12px; opacity: 0.6; }
     .dl { padding: 7px 14px; border-radius: 9px; background: rgba(59,130,246,0.16); color: #60a5fa; text-decoration: none; font-size: 13px; font-weight: 600; flex-shrink: 0; }
     #status { font-size: 13px; margin-top: 10px; opacity: 0.8; text-align: center; }
+    #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.86); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+    #lightbox img { max-width: 100%; max-height: 88vh; border-radius: 12px; }
   </style>
 </head>
 <body>
@@ -401,21 +465,35 @@ async fn mobile_portal_html() -> Html<&'static str> {
     <div class="label">Shared from Computer</div>
     <div id="sharedList"><div style="font-size:13px;opacity:0.6">Loading...</div></div>
   </div>
+  <div id="lightbox" onclick="this.style.display='none'"><img id="lightboxImg" alt="Preview" /></div>
   <script>
     const fmt = b => b < 1024 ? b + ' B' : b < 1048576 ? (b/1024).toFixed(1) + ' KB' : (b/1048576).toFixed(1) + ' MB';
+    const isImg = name => /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
+    const getExt = name => { const p = name.split('.'); return p.length > 1 ? p.pop().slice(0,4).toUpperCase() : 'FILE'; };
+    function openPreview(url) {
+      document.getElementById('lightboxImg').src = url;
+      document.getElementById('lightbox').style.display = 'flex';
+    }
     fetch('/api/info').then(r => r.json()).then(d => {
       document.getElementById('deviceTitle').textContent = 'LocalFTP — ' + d.name;
     }).catch(() => {});
     async function loadShared() {
-      const res = await fetch('/api/shared');
-      const items = await res.json();
-      const box = document.getElementById('sharedList');
-      if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files shared yet.</div>'; return; }
-      box.innerHTML = items.map(f =>
-        `<div class="file-row"><div><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div><a class="dl" href="/api/shared/${f.id}/download">Download</a></div>`
-      ).join('');
+      try {
+        const res = await fetch('/api/shared');
+        const items = await res.json();
+        const box = document.getElementById('sharedList');
+        if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files shared yet.</div>'; return; }
+        box.innerHTML = items.map(f => {
+          const previewUrl = `/api/shared/${f.id}/preview`;
+          const thumb = isImg(f.name)
+            ? `<img class="thumb" src="${previewUrl}" alt="${f.name}" onclick="openPreview('${previewUrl}')" />`
+            : `<div class="ext-badge">${getExt(f.name)}</div>`;
+          return `<div class="file-row"><div class="file-left">${thumb}<div class="file-meta"><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div></div><a class="dl" href="/api/shared/${f.id}/download">Download</a></div>`;
+        }).join('');
+      } catch {}
     }
     loadShared();
+    setInterval(loadShared, 3000);
     document.getElementById('picker').addEventListener('change', async (e) => {
       const files = e.target.files;
       if (!files.length) return;
