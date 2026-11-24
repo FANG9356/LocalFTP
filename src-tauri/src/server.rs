@@ -1,5 +1,5 @@
 use crate::models::{
-    AppState, OfferRequest, OfferResponse, SelfInfo, SharedFile, TransferDirection, TransferItem,
+    AppState, OfferRequest, OfferResponse, SelfInfo, TransferDirection, TransferItem,
     TransferStatus,
 };
 use axum::{
@@ -17,7 +17,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -31,6 +30,7 @@ struct ServerContext {
 struct BridgeQuery {
     t: Option<String>,
     cid: Option<String>,
+    ids: Option<String>,
 }
 
 async fn is_authorized(state: &Arc<AppState>, q: &BridgeQuery) -> bool {
@@ -60,6 +60,7 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
             .route("/api/offer", post(handle_offer))
             .route("/api/upload/{transfer_id}", post(handle_upload))
             .route("/api/shared", get(list_shared))
+            .route("/api/shared/download-zip", get(download_shared_zip))
             .route("/api/shared/{file_id}/download", get(download_shared))
             .route("/api/shared/{file_id}/preview", get(preview_shared))
             .route("/api/transfers/{transfer_id}/preview", get(preview_transfer))
@@ -250,6 +251,100 @@ async fn download_shared(
                 .into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "Cannot open file").into_response(),
+    }
+}
+
+async fn download_shared_zip(
+    State(ctx): State<ServerContext>,
+    Query(q): Query<BridgeQuery>,
+) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (StatusCode::UNAUTHORIZED, "Invalid or expired QR token").into_response();
+    }
+
+    let selected_ids: Vec<String> = q
+        .ids
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let files = {
+        let all = ctx.state.shared_files.read().await;
+        if selected_ids.is_empty() {
+            all.clone()
+        } else {
+            all.iter()
+                .filter(|f| selected_ids.contains(&f.id))
+                .cloned()
+                .collect()
+        }
+    };
+
+    if files.is_empty() {
+        return (StatusCode::NOT_FOUND, "No files to download").into_response();
+    }
+
+    let temp_zip = std::env::temp_dir().join(format!("localftp-{}.zip", Uuid::new_v4()));
+    let temp_zip_clone = temp_zip.clone();
+
+    let zip_res = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let out_file = std::fs::File::create(&temp_zip_clone).map_err(|e| e.to_string())?;
+        let mut writer = zip::ZipWriter::new(out_file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        let mut used_names = std::collections::HashSet::new();
+        for f in files {
+            let Ok(mut src) = std::fs::File::open(&f.path) else {
+                continue;
+            };
+            let mut entry_name = f.name.clone();
+            if !used_names.insert(entry_name.clone()) {
+                entry_name = format!("{}-{}", &f.id[..4.min(f.id.len())], f.name);
+                used_names.insert(entry_name.clone());
+            }
+            writer
+                .start_file(entry_name, options)
+                .map_err(|e| e.to_string())?;
+            std::io::copy(&mut src, &mut writer).map_err(|e| e.to_string())?;
+        }
+        writer.finish().map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await;
+
+    match zip_res {
+        Ok(Ok(())) => match tokio::fs::File::open(&temp_zip).await {
+            Ok(file) => {
+                let stream = ReaderStream::new(file);
+                let body = Body::from_stream(stream);
+                // Clean up temp file after a short delay once opened
+                let cleanup_path = temp_zip.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    let _ = tokio::fs::remove_file(cleanup_path).await;
+                });
+                (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, "application/zip".to_string()),
+                        (
+                            header::CONTENT_DISPOSITION,
+                            "attachment; filename=\"LocalFTP-files.zip\"".to_string(),
+                        ),
+                    ],
+                    body,
+                )
+                    .into_response()
+            }
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read zip").into_response(),
+        },
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create zip").into_response(),
     }
 }
 
@@ -518,6 +613,11 @@ async fn mobile_portal_html(
     .label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin-bottom: 12px; }
     .btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 12px 16px; border-radius: 12px; border: none; background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
     .sent-badge { padding: 4px 10px; border-radius: 999px; background: rgba(16,185,129,0.16); color: #34d399; font-size: 11px; font-weight: 600; flex-shrink: 0; text-transform: capitalize; }
+    .batch-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .batch-btn { flex: 1; min-width: 120px; padding: 9px 12px; border-radius: 10px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; background: rgba(59,130,246,0.16); color: #60a5fa; }
+    .batch-btn.primary { background: #3b82f6; color: #fff; }
+    .batch-btn:disabled { opacity: 0.4; cursor: default; }
+    .chk { width: 18px; height: 18px; accent-color: #3b82f6; flex-shrink: 0; cursor: pointer; }
     .file-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,0.15); gap: 12px; }
     .file-row:last-child { border-bottom: none; }
     .file-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
@@ -543,6 +643,10 @@ async fn mobile_portal_html(
   </div>
   <div class="card">
     <div class="label">Shared from Computer</div>
+    <div id="batchBar" class="batch-bar" style="display:none">
+      <button id="dlSelectedBtn" class="batch-btn" onclick="downloadSelected()" disabled>Download Selected</button>
+      <button id="dlAllBtn" class="batch-btn primary" onclick="downloadAll()">Download All</button>
+    </div>
     <div id="sharedList"><div style="font-size:13px;opacity:0.6">Loading...</div></div>
   </div>
   <div class="card">
@@ -565,6 +669,38 @@ async fn mobile_portal_html(
       document.getElementById('lightboxImg').src = url;
       document.getElementById('lightbox').style.display = 'flex';
     }
+    const selectedIds = new Set();
+    let currentShared = [];
+    function updateBatchBar() {
+      const bar = document.getElementById('batchBar');
+      const selBtn = document.getElementById('dlSelectedBtn');
+      if (!currentShared.length) { bar.style.display = 'none'; return; }
+      bar.style.display = 'flex';
+      const count = selectedIds.size;
+      selBtn.disabled = count === 0;
+      selBtn.textContent = count > 0 ? `Download Selected (${count})` : 'Download Selected';
+    }
+    function toggleSelect(id, checked) {
+      if (checked) selectedIds.add(id); else selectedIds.delete(id);
+      updateBatchBar();
+    }
+    function downloadSelected() {
+      const ids = Array.from(selectedIds);
+      if (!ids.length) return;
+      if (ids.length === 1) {
+        location.href = `/api/shared/${ids[0]}/download?${authQ}`;
+        return;
+      }
+      location.href = `/api/shared/download-zip?${authQ}&ids=${encodeURIComponent(ids.join(','))}`;
+    }
+    function downloadAll() {
+      if (!currentShared.length) return;
+      if (currentShared.length === 1) {
+        location.href = `/api/shared/${currentShared[0].id}/download?${authQ}`;
+        return;
+      }
+      location.href = `/api/shared/download-zip?${authQ}`;
+    }
     fetch('/api/info').then(r => r.json()).then(d => {
       document.getElementById('deviceTitle').textContent = 'LocalFTP — ' + d.name;
     }).catch(() => {});
@@ -573,14 +709,19 @@ async fn mobile_portal_html(
         const res = await fetch('/api/shared?' + authQ);
         if (!res.ok) return;
         const items = await res.json();
+        currentShared = items;
+        const validIds = new Set(items.map(i => i.id));
+        for (const id of Array.from(selectedIds)) { if (!validIds.has(id)) selectedIds.delete(id); }
+        updateBatchBar();
         const box = document.getElementById('sharedList');
         if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files shared yet.</div>'; return; }
         box.innerHTML = items.map(f => {
           const previewUrl = `/api/shared/${f.id}/preview?${authQ}`;
+          const checked = selectedIds.has(f.id) ? 'checked' : '';
           const thumb = isImg(f.name)
             ? `<img class="thumb" src="${previewUrl}" alt="${f.name}" onclick="openPreview('${previewUrl}')" />`
             : `<div class="ext-badge">${getExt(f.name)}</div>`;
-          return `<div class="file-row"><div class="file-left">${thumb}<div class="file-meta"><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div></div><a class="dl" href="/api/shared/${f.id}/download?${authQ}">Download</a></div>`;
+          return `<div class="file-row"><div class="file-left"><input type="checkbox" class="chk" ${checked} onchange="toggleSelect('${f.id}', this.checked)" />${thumb}<div class="file-meta"><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div></div><a class="dl" href="/api/shared/${f.id}/download?${authQ}">Download</a></div>`;
         }).join('');
       } catch {}
     }
