@@ -40,6 +40,11 @@ function isImageFile(name: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
 }
 
+function formatNodeCode(id: string): string {
+  const clean = id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toUpperCase();
+  return `LF-${clean || "NODE"}`;
+}
+
 function OsIcon({ os, className }: { os: string; className?: string }) {
   const lower = os.toLowerCase();
   if (lower.includes("mac")) return <Laptop className={className} strokeWidth={1.6} />;
@@ -278,7 +283,7 @@ export default function App() {
                 className="h-1.5 w-1.5 rounded-full"
                 style={{ background: accent.primary }}
               />
-              {selfInfo.ip}
+              {formatNodeCode(selfInfo.id)}
             </span>
           )}
         </div>
@@ -562,7 +567,7 @@ export default function App() {
                 <div className="text-left">
                   <div className="text-[12px] font-semibold">{selfInfo.name}</div>
                   <div className={`text-[11px] ${subtleText}`}>
-                    Visible as {selfInfo.os} on {selfInfo.ip}:{selfInfo.port}
+                    Visible as {selfInfo.os} • {formatNodeCode(selfInfo.id)}
                   </div>
                 </div>
               </div>
@@ -589,11 +594,11 @@ export default function App() {
                 files directly in your browser.
               </p>
               <div
-                className={`mt-3 px-3 py-1.5 rounded-xl text-[12px] font-mono ${
+                className={`mt-3 px-3.5 py-1.5 rounded-xl text-[12px] font-medium tracking-wide ${
                   isDark ? "bg-white/8 text-zinc-200" : "bg-black/5 text-zinc-700"
                 }`}
               >
-                {mobileUrl || "Starting server..."}
+                {selfInfo ? `Bridge ${formatNodeCode(selfInfo.id)} • Ready to scan` : "Starting bridge..."}
               </div>
             </div>
 
