@@ -828,7 +828,7 @@ export default function App() {
                               : "bg-black/8 text-zinc-700"
                           }`}
                         >
-                          {t.status}
+                          {t.status === "transferring" ? `${pct}%` : t.status}
                         </span>
                       </div>
                       {t.status === "transferring" && (

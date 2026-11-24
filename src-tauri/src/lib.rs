@@ -7,9 +7,36 @@ use models::{
     TransferItem, TransferStatus,
 };
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tauri::{AppHandle, Emitter, State};
+use tokio::io::{AsyncRead, ReadBuf};
 use uuid::Uuid;
+
+struct ProgressReader<R> {
+    inner: R,
+    sent: Arc<AtomicU64>,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for ProgressReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let poll = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if let Poll::Ready(Ok(())) = &poll {
+            let delta = buf.filled().len().saturating_sub(before) as u64;
+            if delta > 0 {
+                self.sent.fetch_add(delta, Ordering::Relaxed);
+            }
+        }
+        poll
+    }
+}
 
 #[tauri::command]
 async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, String> {
@@ -176,17 +203,45 @@ async fn send_files_to_peer(
             let Ok(file) = tokio::fs::File::open(&path).await else {
                 continue;
             };
-            let stream = tokio_util::io::ReaderStream::new(file);
+            let sent_counter = Arc::new(AtomicU64::new(0));
+            let upload_done = Arc::new(AtomicBool::new(false));
+            let reader = ProgressReader {
+                inner: file,
+                sent: Arc::clone(&sent_counter),
+            };
+            let stream = tokio_util::io::ReaderStream::new(reader);
             let body = reqwest::Body::wrap_stream(stream);
             let part = reqwest::multipart::Part::stream_with_length(body, file_size)
                 .file_name(file_name);
             let form = reqwest::multipart::Form::new().part("file", part);
+
+            let ticker_state = Arc::clone(&shared_state);
+            let ticker_app = app.clone();
+            let ticker_id = transfer_id.clone();
+            let ticker_sent = Arc::clone(&sent_counter);
+            let ticker_done = Arc::clone(&upload_done);
+            let ticker = tauri::async_runtime::spawn(async move {
+                while !ticker_done.load(Ordering::Relaxed) {
+                    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                    let bytes = ticker_sent.load(Ordering::Relaxed).min(file_size);
+                    {
+                        let mut transfers = ticker_state.transfers.write().await;
+                        if let Some(t) = transfers.iter_mut().find(|t| t.id == ticker_id) {
+                            t.bytes_transferred = bytes;
+                        }
+                    }
+                    server::emit_transfers(&ticker_state, &ticker_app).await;
+                }
+            });
 
             let upload_res = client
                 .post(format!("{}/api/upload/{}", base_url, transfer_id))
                 .multipart(form)
                 .send()
                 .await;
+
+            upload_done.store(true, Ordering::Relaxed);
+            let _ = ticker.await;
 
             let mut transfers = shared_state.transfers.write().await;
             if let Some(t) = transfers.iter_mut().find(|t| t.id == transfer_id) {

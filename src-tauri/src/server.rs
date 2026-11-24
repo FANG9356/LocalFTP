@@ -638,6 +638,8 @@ async fn mobile_portal_html(
     .file-size { font-size: 12px; opacity: 0.6; }
     .dl { padding: 7px 14px; border-radius: 9px; background: rgba(59,130,246,0.16); color: #60a5fa; text-decoration: none; font-size: 13px; font-weight: 600; flex-shrink: 0; }
     #status { font-size: 13px; margin-top: 10px; opacity: 0.8; text-align: center; }
+    .prog-wrap { width: 100%; height: 6px; border-radius: 999px; background: rgba(128,128,128,0.22); overflow: hidden; margin-top: 10px; display: none; }
+    .prog-fill { height: 100%; width: 0%; background: #3b82f6; border-radius: 999px; transition: width 0.12s ease; }
     #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.86); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
     #lightbox img { max-width: 100%; max-height: 88vh; border-radius: 12px; }
   </style>
@@ -652,6 +654,7 @@ async fn mobile_portal_html(
           <div class="label">Send to Computer</div>
           <input id="picker" type="file" multiple style="display:none" />
           <button class="btn" onclick="document.getElementById('picker').click()">Choose Photos or Files</button>
+          <div id="progWrap" class="prog-wrap"><div id="progFill" class="prog-fill"></div></div>
           <div id="status"></div>
         </div>
         <div class="card">
@@ -762,20 +765,44 @@ async fn mobile_portal_html(
     loadShared();
     loadSent();
     setInterval(() => { loadShared(); loadSent(); }, 3000);
-    document.getElementById('picker').addEventListener('change', async (e) => {
+    document.getElementById('picker').addEventListener('change', (e) => {
       const files = e.target.files;
       if (!files.length) return;
       const status = document.getElementById('status');
-      status.textContent = 'Uploading ' + files.length + ' file(s)...';
+      const progWrap = document.getElementById('progWrap');
+      const progFill = document.getElementById('progFill');
+      progWrap.style.display = 'block';
+      progFill.style.width = '0%';
+      status.textContent = `Uploading ${files.length} file(s)... 0%`;
       const fd = new FormData();
       for (const f of files) fd.append('file', f, f.name);
-      const res = await fetch('/api/mobile-upload?' + authQ, {
-        method: 'POST',
-        body: fd
-      });
-      status.textContent = res.ok ? 'Sent successfully!' : 'Upload failed';
-      e.target.value = '';
-      loadSent();
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/mobile-upload?' + authQ);
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && ev.total > 0) {
+          const pct = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
+          progFill.style.width = pct + '%';
+          status.textContent = `Uploading ${fmt(ev.loaded)} / ${fmt(ev.total)} (${pct}%)`;
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          progFill.style.width = '100%';
+          status.textContent = 'Sent successfully!';
+        } else {
+          status.textContent = 'Upload failed';
+        }
+        e.target.value = '';
+        loadSent();
+        setTimeout(() => { progWrap.style.display = 'none'; }, 2500);
+      };
+      xhr.onerror = () => {
+        status.textContent = 'Upload failed';
+        e.target.value = '';
+        setTimeout(() => { progWrap.style.display = 'none'; }, 2500);
+      };
+      xhr.send(fd);
     });
   </script>
 </body>
