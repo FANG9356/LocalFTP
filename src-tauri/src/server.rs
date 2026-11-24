@@ -51,6 +51,7 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
             .route("/api/shared/{file_id}/download", get(download_shared))
             .route("/api/shared/{file_id}/preview", get(preview_shared))
             .route("/api/transfers/{transfer_id}/preview", get(preview_transfer))
+            .route("/api/mobile-sent", get(list_mobile_sent))
             .route("/api/mobile-upload", post(handle_mobile_upload))
             .layer(DefaultBodyLimit::disable())
             .with_state(ctx);
@@ -198,6 +199,16 @@ async fn list_shared(State(ctx): State<ServerContext>) -> Json<Vec<SharedFile>> 
     Json(files)
 }
 
+async fn list_mobile_sent(State(ctx): State<ServerContext>) -> Json<Vec<TransferItem>> {
+    let transfers = ctx.state.transfers.read().await;
+    let sent: Vec<TransferItem> = transfers
+        .iter()
+        .filter(|t| t.peer_ip == "mobile" || t.peer_name == "Mobile Browser")
+        .cloned()
+        .collect();
+    Json(sent)
+}
+
 async fn download_shared(
     State(ctx): State<ServerContext>,
     Path(file_id): Path<String>,
@@ -323,18 +334,8 @@ async fn handle_mobile_upload(
 ) -> impl IntoResponse {
     let save_dir = ctx.state.save_dir.read().await.clone();
     let mut saved_count = 0usize;
-    let mut sender_name = "Mobile Browser".to_string();
 
     while let Ok(Some(mut field)) = multipart.next_field().await {
-        if field.name() == Some("sender_name") {
-            if let Ok(text) = field.text().await {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    sender_name = trimmed.to_string();
-                }
-            }
-            continue;
-        }
         let raw_name = field
             .file_name()
             .map(|s| s.to_string())
@@ -347,7 +348,7 @@ async fn handle_mobile_upload(
             file_name: raw_name.clone(),
             file_size: 0,
             bytes_transferred: 0,
-            peer_name: sender_name.clone(),
+            peer_name: "Mobile Browser".to_string(),
             peer_ip: "mobile".to_string(),
             direction: TransferDirection::Incoming,
             status: TransferStatus::Transferring,
@@ -479,8 +480,7 @@ async fn mobile_portal_html() -> Html<&'static str> {
     .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
     .label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin-bottom: 12px; }
     .btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 12px 16px; border-radius: 12px; border: none; background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
-    .name-row { display: flex; gap: 8px; margin-bottom: 12px; }
-    .name-input { flex: 1; padding: 9px 12px; border-radius: 10px; border: 1px solid rgba(128,128,128,0.25); background: transparent; color: inherit; font-size: 14px; outline: none; }
+    .sent-badge { padding: 4px 10px; border-radius: 999px; background: rgba(16,185,129,0.16); color: #34d399; font-size: 11px; font-weight: 600; flex-shrink: 0; text-transform: capitalize; }
     .file-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,0.15); gap: 12px; }
     .file-row:last-child { border-bottom: none; }
     .file-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
@@ -500,9 +500,6 @@ async fn mobile_portal_html() -> Html<&'static str> {
   <p class="sub">Direct local transfer over Wi-Fi / Hotspot</p>
   <div class="card">
     <div class="label">Send to Computer</div>
-    <div class="name-row">
-      <input id="senderName" class="name-input" type="text" placeholder="Your device name (e.g. iPhone)" />
-    </div>
     <input id="picker" type="file" multiple style="display:none" />
     <button class="btn" onclick="document.getElementById('picker').click()">Choose Photos or Files</button>
     <div id="status"></div>
@@ -510,6 +507,10 @@ async fn mobile_portal_html() -> Html<&'static str> {
   <div class="card">
     <div class="label">Shared from Computer</div>
     <div id="sharedList"><div style="font-size:13px;opacity:0.6">Loading...</div></div>
+  </div>
+  <div class="card">
+    <div class="label">Sent to Computer</div>
+    <div id="sentList"><div style="font-size:13px;opacity:0.6">No files sent yet.</div></div>
   </div>
   <div id="lightbox" onclick="this.style.display='none'"><img id="lightboxImg" alt="Preview" /></div>
   <script>
@@ -538,21 +539,30 @@ async fn mobile_portal_html() -> Html<&'static str> {
         }).join('');
       } catch {}
     }
+    async function loadSent() {
+      try {
+        const res = await fetch('/api/mobile-sent');
+        const items = await res.json();
+        const box = document.getElementById('sentList');
+        if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files sent yet.</div>'; return; }
+        box.innerHTML = items.map(t => {
+          const previewUrl = `/api/transfers/${t.id}/preview`;
+          const thumb = (t.save_path && isImg(t.file_name))
+            ? `<img class="thumb" src="${previewUrl}" alt="${t.file_name}" onclick="openPreview('${previewUrl}')" />`
+            : `<div class="ext-badge">${getExt(t.file_name)}</div>`;
+          return `<div class="file-row"><div class="file-left">${thumb}<div class="file-meta"><div class="file-name">${t.file_name}</div><div class="file-size">${fmt(t.file_size)}</div></div></div><span class="sent-badge">${t.status}</span></div>`;
+        }).join('');
+      } catch {}
+    }
     loadShared();
-    setInterval(loadShared, 3000);
-    const nameInput = document.getElementById('senderName');
-    nameInput.value = localStorage.getItem('localftp-mobile-name') || '';
-    nameInput.addEventListener('input', () => {
-      localStorage.setItem('localftp-mobile-name', nameInput.value);
-    });
+    loadSent();
+    setInterval(() => { loadShared(); loadSent(); }, 3000);
     document.getElementById('picker').addEventListener('change', async (e) => {
       const files = e.target.files;
       if (!files.length) return;
       const status = document.getElementById('status');
       status.textContent = 'Uploading ' + files.length + ' file(s)...';
       const fd = new FormData();
-      const customName = (nameInput.value || '').trim();
-      if (customName) fd.append('sender_name', customName);
       for (const f of files) fd.append('file', f, f.name);
       const res = await fetch('/api/mobile-upload', {
         method: 'POST',
@@ -560,6 +570,7 @@ async fn mobile_portal_html() -> Html<&'static str> {
       });
       status.textContent = res.ok ? 'Sent successfully!' : 'Upload failed';
       e.target.value = '';
+      loadSent();
     });
   </script>
 </body>
