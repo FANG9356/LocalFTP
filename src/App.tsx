@@ -36,6 +36,10 @@ import type {
 
 type TabKey = "nearby" | "mobile" | "transfers";
 
+function isImageFile(name: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
+}
+
 function OsIcon({ os, className }: { os: string; className?: string }) {
   const lower = os.toLowerCase();
   if (lower.includes("mac")) return <Laptop className={className} strokeWidth={1.6} />;
@@ -62,7 +66,7 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [queuedPaths, setQueuedPaths] = useState<string[] | null>(null);
   const [pendingOffer, setPendingOffer] = useState<TransferItem | null>(null);
-  const [mobileToast, setMobileToast] = useState<TransferItem | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -110,12 +114,6 @@ export default function App() {
     const unlistenOffer = listen<TransferItem>("transfer-offer", (e) => {
       setPendingOffer(e.payload);
     });
-    const unlistenMobile = listen<TransferItem>("mobile-received", (e) => {
-      setMobileToast(e.payload);
-      window.setTimeout(() => {
-        setMobileToast((prev) => (prev?.id === e.payload.id ? null : prev));
-      }, 7000);
-    });
     const unlistenSelf = listen("self-updated", async () => {
       const info = await invoke<SelfInfo>("get_self_info");
       setSelfInfo(info);
@@ -150,7 +148,6 @@ export default function App() {
       unlistenPeers.then((f) => f());
       unlistenTransfers.then((f) => f());
       unlistenOffer.then((f) => f());
-      unlistenMobile.then((f) => f());
       unlistenSelf.then((f) => f());
       if (unlistenDrop) unlistenDrop();
     };
@@ -630,29 +627,54 @@ export default function App() {
                       <span className={`text-[12px] ${subtleText}`}>No files shared yet</span>
                     </div>
                   ) : (
-                    sharedFiles.map((f) => (
-                      <div
-                        key={f.id}
-                        className={`flex items-center justify-between px-3 py-2 rounded-xl ${
-                          isDark ? "bg-white/[0.05]" : "bg-black/[0.04]"
-                        }`}
-                      >
-                        <div className="min-w-0 pr-3">
-                          <div className="text-[13px] font-medium truncate">{f.name}</div>
-                          <div className={`text-[11px] ${subtleText}`}>{formatBytes(f.size)}</div>
-                        </div>
-                        <button
-                          onClick={() =>
-                            invoke<SharedFile[]>("remove_shared_file", { fileId: f.id }).then(
-                              setSharedFiles
-                            )
-                          }
-                          className="p-1.5 rounded-lg opacity-60 hover:opacity-100 cursor-pointer"
+                    sharedFiles.map((f) => {
+                      const thumbUrl =
+                        selfInfo && isImageFile(f.name)
+                          ? `http://127.0.0.1:${selfInfo.port}/api/shared/${f.id}/preview`
+                          : null;
+                      return (
+                        <div
+                          key={f.id}
+                          className={`flex items-center justify-between px-3 py-2 rounded-xl ${
+                            isDark ? "bg-white/[0.05]" : "bg-black/[0.04]"
+                          }`}
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ))
+                          <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                            {thumbUrl ? (
+                              <img
+                                src={thumbUrl}
+                                alt={f.name}
+                                onClick={() => setPreviewUrl(thumbUrl)}
+                                className="h-9 w-9 rounded-lg object-cover shrink-0 cursor-pointer hover:opacity-90"
+                              />
+                            ) : (
+                              <div
+                                className="h-9 w-9 rounded-lg flex items-center justify-center shrink-0"
+                                style={{ background: accent.soft, color: accent.primary }}
+                              >
+                                <FileIcon className="h-4 w-4" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <div className="text-[13px] font-medium truncate">{f.name}</div>
+                              <div className={`text-[11px] ${subtleText}`}>
+                                {formatBytes(f.size)}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() =>
+                              invoke<SharedFile[]>("remove_shared_file", { fileId: f.id }).then(
+                                setSharedFiles
+                              )
+                            }
+                            className="p-1.5 rounded-lg opacity-60 hover:opacity-100 cursor-pointer"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -670,30 +692,47 @@ export default function App() {
                   ) : (
                     transfers
                       .filter((t) => t.peer_name === "Mobile Browser")
-                      .map((t) => (
-                        <div
-                          key={t.id}
-                          className={`flex items-center justify-between px-3 py-2 rounded-xl ${
-                            isDark ? "bg-white/[0.05]" : "bg-black/[0.04]"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <ArrowDownLeft
-                              className="h-3.5 w-3.5 shrink-0"
-                              style={{ color: accent.primary }}
-                            />
-                            <div className="min-w-0">
-                              <div className="text-[12px] font-medium truncate">{t.file_name}</div>
-                              <div className={`text-[10px] ${subtleText}`}>
-                                {formatBytes(t.file_size)}
+                      .map((t) => {
+                        const thumbUrl =
+                          selfInfo && t.save_path && isImageFile(t.file_name)
+                            ? `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview`
+                            : null;
+                        return (
+                          <div
+                            key={t.id}
+                            className={`flex items-center justify-between px-3 py-2 rounded-xl ${
+                              isDark ? "bg-white/[0.05]" : "bg-black/[0.04]"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              {thumbUrl ? (
+                                <img
+                                  src={thumbUrl}
+                                  alt={t.file_name}
+                                  onClick={() => setPreviewUrl(thumbUrl)}
+                                  className="h-8 w-8 rounded-lg object-cover shrink-0 cursor-pointer hover:opacity-90"
+                                />
+                              ) : (
+                                <ArrowDownLeft
+                                  className="h-3.5 w-3.5 shrink-0"
+                                  style={{ color: accent.primary }}
+                                />
+                              )}
+                              <div className="min-w-0">
+                                <div className="text-[12px] font-medium truncate">
+                                  {t.file_name}
+                                </div>
+                                <div className={`text-[10px] ${subtleText}`}>
+                                  {formatBytes(t.file_size)}
+                                </div>
                               </div>
                             </div>
+                            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 capitalize">
+                              {t.status}
+                            </span>
                           </div>
-                          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 capitalize">
-                            {t.status}
-                          </span>
-                        </div>
-                      ))
+                        );
+                      })
                   )}
                 </div>
               </div>
@@ -732,16 +771,29 @@ export default function App() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0">
-                          <div
-                            className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0"
-                            style={{ background: accent.soft, color: accent.primary }}
-                          >
-                            {t.direction === "incoming" ? (
-                              <ArrowDownLeft className="h-4 w-4" />
-                            ) : (
-                              <ArrowUpRight className="h-4 w-4" />
-                            )}
-                          </div>
+                          {selfInfo && t.save_path && isImageFile(t.file_name) ? (
+                            <img
+                              src={`http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview`}
+                              alt={t.file_name}
+                              onClick={() =>
+                                setPreviewUrl(
+                                  `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview`
+                                )
+                              }
+                              className="h-9 w-9 rounded-xl object-cover shrink-0 cursor-pointer hover:opacity-90"
+                            />
+                          ) : (
+                            <div
+                              className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0"
+                              style={{ background: accent.soft, color: accent.primary }}
+                            >
+                              {t.direction === "incoming" ? (
+                                <ArrowDownLeft className="h-4 w-4" />
+                              ) : (
+                                <ArrowUpRight className="h-4 w-4" />
+                              )}
+                            </div>
+                          )}
                           <div className="min-w-0">
                             <div className="text-[13px] font-semibold truncate">
                               {t.file_name}
@@ -849,39 +901,17 @@ export default function App() {
         </div>
       )}
 
-      {/* Mobile Received Toast Notification */}
-      {mobileToast && (
+      {/* Image Preview Lightbox */}
+      {previewUrl && (
         <div
-          className={`fixed bottom-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl backdrop-blur-2xl max-w-xs ${glassCard}`}
+          onClick={() => setPreviewUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-8 cursor-pointer"
         >
-          <div
-            className="h-8 w-8 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: accent.soft, color: accent.primary }}
-          >
-            <Smartphone className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-[12px] font-semibold">Received from Mobile</div>
-            <div className={`text-[11px] truncate ${subtleText}`}>
-              {mobileToast.file_name} ({formatBytes(mobileToast.file_size)})
-            </div>
-          </div>
-          <button
-            onClick={() => {
-              setTab("transfers");
-              setMobileToast(null);
-            }}
-            className="text-[11px] font-semibold px-2 py-1 rounded-lg text-white cursor-pointer shrink-0"
-            style={{ background: accent.primary }}
-          >
-            View
-          </button>
-          <button
-            onClick={() => setMobileToast(null)}
-            className="opacity-60 hover:opacity-100 cursor-pointer shrink-0"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <img
+            src={previewUrl}
+            alt="Preview"
+            className="max-w-full max-h-full rounded-2xl shadow-2xl object-contain"
+          />
         </div>
       )}
 

@@ -50,6 +50,7 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
             .route("/api/shared", get(list_shared))
             .route("/api/shared/{file_id}/download", get(download_shared))
             .route("/api/shared/{file_id}/preview", get(preview_shared))
+            .route("/api/transfers/{transfer_id}/preview", get(preview_transfer))
             .route("/api/mobile-upload", post(handle_mobile_upload))
             .layer(DefaultBodyLimit::disable())
             .with_state(ctx);
@@ -281,6 +282,41 @@ async fn preview_shared(
     }
 }
 
+async fn preview_transfer(
+    State(ctx): State<ServerContext>,
+    Path(transfer_id): Path<String>,
+) -> impl IntoResponse {
+    let item = {
+        let transfers = ctx.state.transfers.read().await;
+        transfers.iter().find(|t| t.id == transfer_id).cloned()
+    };
+
+    let Some(transfer) = item else {
+        return (StatusCode::NOT_FOUND, "Transfer not found").into_response();
+    };
+    let Some(path) = transfer.save_path else {
+        return (StatusCode::NOT_FOUND, "No local file path").into_response();
+    };
+
+    match tokio::fs::File::open(&path).await {
+        Ok(file) => {
+            let stream = ReaderStream::new(file);
+            let body = Body::from_stream(stream);
+            let mime = content_type_for_name(&transfer.file_name);
+            (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, mime.to_string()),
+                    (header::CONTENT_DISPOSITION, "inline".to_string()),
+                ],
+                body,
+            )
+                .into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Cannot open file").into_response(),
+    }
+}
+
 async fn handle_mobile_upload(
     State(ctx): State<ServerContext>,
     mut multipart: Multipart,
@@ -339,7 +375,6 @@ async fn handle_mobile_upload(
         }
         let _ = file.flush().await;
 
-        let mut completed_item: Option<TransferItem> = None;
         {
             let mut transfers = ctx.state.transfers.write().await;
             if let Some(t) = transfers.iter_mut().find(|t| t.id == transfer_id) {
@@ -347,11 +382,7 @@ async fn handle_mobile_upload(
                 t.bytes_transferred = written;
                 t.status = TransferStatus::Completed;
                 t.save_path = Some(dest_path.to_string_lossy().to_string());
-                completed_item = Some(t.clone());
             }
-        }
-        if let Some(done) = completed_item {
-            let _ = ctx.app.emit("mobile-received", &done);
         }
         emit_transfers(&ctx.state, &ctx.app).await;
         saved_count += 1;
