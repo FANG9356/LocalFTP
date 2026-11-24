@@ -612,8 +612,9 @@ async fn mobile_portal_html(
     .grid { display: flex; flex-direction: column; gap: 16px; }
     .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
     @media (min-width: 768px) {
-      .wrap { max-width: 980px; padding: 32px 28px 44px; }
-      .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 20px; align-items: start; }
+      .wrap { max-width: 1000px; padding: 34px 30px 48px; }
+      .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 28px; align-items: start; }
+      .col { gap: 24px; }
     }
     h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.02em; }
     p.sub { font-size: 13px; opacity: 0.65; margin: 0 0 20px; }
