@@ -550,66 +550,6 @@ export default function App() {
                     {accentId === t.id && <Check className="h-3.5 w-3.5" />}
                   </button>
                 ))}
-                <div className="flex items-center justify-between pt-1">
-                  <div>
-                    <div className="text-[12px] font-medium">Standalone Mode</div>
-                    <div className={`text-[10px] ${subtleText}`}>
-                      Direct Hotspot (Win) / Sharing (Mac)
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleToggleStandalone}
-                    className={`w-10 h-5.5 rounded-full p-0.5 transition-colors cursor-pointer ${
-                      selfInfo?.standalone_mode
-                        ? ""
-                        : isDark
-                        ? "bg-white/15"
-                        : "bg-black/15"
-                    }`}
-                    style={
-                      selfInfo?.standalone_mode ? { background: accent.primary } : undefined
-                    }
-                  >
-                    <div
-                      className={`h-4.5 w-4.5 rounded-full bg-white shadow transition-transform ${
-                        selfInfo?.standalone_mode ? "translate-x-4.5" : "translate-x-0"
-                      }`}
-                    />
-                  </button>
-                </div>
-                <div className={`pt-2 border-t ${isDark ? "border-white/10" : "border-black/8"}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className={`text-[11px] font-medium ${subtleText}`}>
-                      Connect by IP
-                    </label>
-                    <span className={`text-[10px] font-mono ${subtleText}`}>
-                      {selfInfo?.ip}:{selfInfo?.port}
-                    </span>
-                  </div>
-                  <div className="flex gap-1.5">
-                    <input
-                      value={manualIp}
-                      onChange={(e) => setManualIp(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleConnectByIp()}
-                      placeholder="192.168.x.x"
-                      className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] outline-none border ${
-                        isDark
-                          ? "bg-white/8 border-white/12 text-white"
-                          : "bg-white/80 border-black/10 text-zinc-900"
-                      }`}
-                    />
-                    <button
-                      onClick={handleConnectByIp}
-                      className="px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-white cursor-pointer"
-                      style={{ background: accent.primary }}
-                    >
-                      Connect
-                    </button>
-                  </div>
-                  {connectError && (
-                    <div className="mt-1.5 text-[10px] text-rose-400">{connectError}</div>
-                  )}
-                </div>
               </div>
             </div>
           )}
@@ -764,7 +704,7 @@ export default function App() {
                       onChange={(e) => setManualIp(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleConnectByIp()}
                       placeholder="192.168.x.x"
-                      className={`flex-1 px-2.5 py-1.5 rounded-lg text-[12px] outline-none border ${
+                      className={`flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-[12px] outline-none border ${
                         isDark
                           ? "bg-white/8 border-white/12 text-white"
                           : "bg-white/80 border-black/10 text-zinc-900"
