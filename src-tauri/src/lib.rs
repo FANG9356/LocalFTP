@@ -575,7 +575,7 @@ async fn set_watch_dir(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     path: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Result<Vec<SharedFile>, String> {
     if let Some(ref p) = path {
         let pb = PathBuf::from(p);
         if !pb.is_dir() {
@@ -587,7 +587,7 @@ async fn set_watch_dir(
     }
     sync_watch_dir(&state, &app).await;
     let _ = app.emit("self-updated", ());
-    Ok(path)
+    Ok(state.shared_files.read().await.clone())
 }
 
 #[tauri::command]

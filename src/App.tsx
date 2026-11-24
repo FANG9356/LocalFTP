@@ -213,6 +213,15 @@ export default function App() {
     }
   };
 
+  const pickFolderGeneral = async () => {
+    const selected = await openDialog({ multiple: true, directory: true });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    if (paths.length > 0) {
+      setQueuedPaths(paths);
+    }
+  };
+
   const sendQueuedToPeer = async (peerId: string) => {
     if (!queuedPaths || queuedPaths.length === 0) return;
     await invoke("send_files_to_peer", { peerId, filePaths: queuedPaths });
@@ -245,12 +254,18 @@ export default function App() {
   const handleChooseWatchDir = async () => {
     const dir = await openDialog({ directory: true, multiple: false });
     if (dir && typeof dir === "string") {
-      await invoke("set_watch_dir", { path: dir });
+      const updated = await invoke<SharedFile[]>("set_watch_dir", { path: dir });
+      setSharedFiles(updated);
+      const info = await invoke<SelfInfo>("get_self_info");
+      setSelfInfo(info);
     }
   };
 
   const handleClearWatchDir = async () => {
-    await invoke("set_watch_dir", { path: null });
+    const updated = await invoke<SharedFile[]>("set_watch_dir", { path: null });
+    setSharedFiles(updated);
+    const info = await invoke<SelfInfo>("get_self_info");
+    setSelfInfo(info);
   };
 
   const openFilePreview = async (url: string, name: string, kind: PreviewKind) => {
@@ -647,14 +662,27 @@ export default function App() {
                   Drop files anywhere or click a device on the same Wi-Fi / Hotspot
                 </p>
               </div>
-              <button
-                onClick={pickFilesGeneral}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-semibold text-white shadow-sm transition-transform active:scale-95 cursor-pointer"
-                style={{ background: accent.primary }}
-              >
-                <Upload className="h-3.5 w-3.5" />
-                Select Files
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={pickFolderGeneral}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-transform active:scale-95 cursor-pointer ${
+                    isDark
+                      ? "bg-white/10 hover:bg-white/16 text-zinc-100"
+                      : "bg-black/6 hover:bg-black/10 text-zinc-800"
+                  }`}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  Send Folder
+                </button>
+                <button
+                  onClick={pickFilesGeneral}
+                  className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-[12px] font-semibold text-white shadow-sm transition-transform active:scale-95 cursor-pointer"
+                  style={{ background: accent.primary }}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Select Files
+                </button>
+              </div>
             </div>
 
             {/* Radar Field */}
