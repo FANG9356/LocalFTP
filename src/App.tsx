@@ -612,20 +612,57 @@ export default function App() {
 
             {/* Radar Field */}
             <div className="relative flex-1 w-full flex items-center justify-center my-4">
-              {/* Concentric Radar Rings */}
-              <div
-                className="pointer-events-none absolute h-56 w-56 rounded-full border opacity-35"
-                style={{ borderColor: accent.ring }}
-              />
-              <div
-                className="pointer-events-none absolute h-84 w-84 rounded-full border opacity-20"
-                style={{ borderColor: accent.ring }}
-              />
-              <div
-                className={`pointer-events-none absolute h-[420px] w-[420px] rounded-full border ${
-                  isDark ? "border-white/[0.06]" : "border-black/[0.06]"
-                }`}
-              />
+              {/* Animated SVG Radar Rings */}
+              <svg
+                viewBox="0 0 440 440"
+                className="pointer-events-none absolute h-[420px] w-[420px]"
+                fill="none"
+              >
+                <circle
+                  cx="220"
+                  cy="220"
+                  r="205"
+                  stroke={isDark ? "#ffffff" : "#000000"}
+                  strokeOpacity="0.06"
+                  strokeWidth="1"
+                />
+                <circle cx="220" cy="220" r="55" stroke={accent.primary} strokeWidth="1.2">
+                  <animate
+                    attributeName="r"
+                    from="55"
+                    to="205"
+                    dur="3.6s"
+                    begin="0s"
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="stroke-opacity"
+                    values="0.45;0.18;0"
+                    keyTimes="0;0.65;1"
+                    dur="3.6s"
+                    begin="0s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <circle cx="220" cy="220" r="55" stroke={accent.primary} strokeWidth="1.2">
+                  <animate
+                    attributeName="r"
+                    from="55"
+                    to="205"
+                    dur="3.6s"
+                    begin="1.8s"
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="stroke-opacity"
+                    values="0.45;0.18;0"
+                    keyTimes="0;0.65;1"
+                    dur="3.6s"
+                    begin="1.8s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              </svg>
 
               {peers.length === 0 ? (
                 <div className="relative z-10 flex flex-col items-center text-center max-w-xs">
