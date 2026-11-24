@@ -4,12 +4,13 @@ use crate::models::{
 };
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{header, StatusCode},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
 };
+use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,6 +25,17 @@ use uuid::Uuid;
 struct ServerContext {
     state: Arc<AppState>,
     app: AppHandle,
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeQuery {
+    t: Option<String>,
+    cid: Option<String>,
+}
+
+async fn is_authorized(state: &Arc<AppState>, q: &BridgeQuery) -> bool {
+    let expected = state.mobile_token.read().await;
+    matches!(q.t.as_deref(), Some(tok) if tok == expected.as_str())
 }
 
 const DEFAULT_PORT: u16 = 53317;
@@ -66,6 +78,7 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
     let ip = local_ip_address::local_ip()
         .map(|i| i.to_string())
         .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let mobile_token = ctx.state.mobile_token.read().await.clone();
     Json(SelfInfo {
         id: ctx.state.self_id.clone(),
         name: ctx.state.device_name.read().await.clone(),
@@ -73,6 +86,7 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
         ip,
         port: *ctx.state.port.read().await,
         save_dir: ctx.state.save_dir.read().await.to_string_lossy().to_string(),
+        mobile_token,
     })
 }
 
@@ -80,8 +94,6 @@ async fn handle_offer(
     State(ctx): State<ServerContext>,
     Json(req): Json<OfferRequest>,
 ) -> Json<OfferResponse> {
-    let (tx, rx) = oneshot::channel::<bool>();
-
     let item = TransferItem {
         id: req.transfer_id.clone(),
         file_name: req.file_name.clone(),
@@ -90,37 +102,18 @@ async fn handle_offer(
         peer_name: req.sender_name.clone(),
         peer_ip: String::new(),
         direction: TransferDirection::Incoming,
-        status: TransferStatus::Pending,
+        status: TransferStatus::Transferring,
         save_path: None,
         error: None,
     };
 
     {
         let mut transfers = ctx.state.transfers.write().await;
-        transfers.insert(0, item.clone());
+        transfers.insert(0, item);
     }
-    {
-        let mut pending = ctx.state.pending_approvals.write().await;
-        pending.insert(req.transfer_id.clone(), tx);
-    }
-
-    let _ = ctx.app.emit("transfer-offer", &item);
     emit_transfers(&ctx.state, &ctx.app).await;
 
-    let accepted = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .unwrap_or(false);
-
-    if !accepted {
-        let mut pending = ctx.state.pending_approvals.write().await;
-        pending.remove(&req.transfer_id);
-        update_transfer_status(&ctx.state, &req.transfer_id, TransferStatus::Rejected, None).await;
-        emit_transfers(&ctx.state, &ctx.app).await;
-    }
-
-    Json(OfferResponse { accepted })
+    Json(OfferResponse { accepted: true })
 }
 
 async fn handle_upload(
@@ -195,25 +188,43 @@ async fn handle_upload(
     (StatusCode::BAD_REQUEST, "No file field provided".to_string())
 }
 
-async fn list_shared(State(ctx): State<ServerContext>) -> Json<Vec<SharedFile>> {
+async fn list_shared(
+    State(ctx): State<ServerContext>,
+    Query(q): Query<BridgeQuery>,
+) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (StatusCode::UNAUTHORIZED, "Invalid or expired QR token").into_response();
+    }
     let files = ctx.state.shared_files.read().await.clone();
-    Json(files)
+    Json(files).into_response()
 }
 
-async fn list_mobile_sent(State(ctx): State<ServerContext>) -> Json<Vec<TransferItem>> {
+async fn list_mobile_sent(
+    State(ctx): State<ServerContext>,
+    Query(q): Query<BridgeQuery>,
+) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (StatusCode::UNAUTHORIZED, "Invalid or expired QR token").into_response();
+    }
+    let cid = q.cid.unwrap_or_else(|| "default".to_string());
+    let target_tag = format!("mobile:{}", cid);
     let transfers = ctx.state.transfers.read().await;
     let sent: Vec<TransferItem> = transfers
         .iter()
-        .filter(|t| t.peer_ip == "mobile" || t.peer_name == "Mobile Browser")
+        .filter(|t| t.peer_ip == target_tag)
         .cloned()
         .collect();
-    Json(sent)
+    Json(sent).into_response()
 }
 
 async fn download_shared(
     State(ctx): State<ServerContext>,
     Path(file_id): Path<String>,
+    Query(q): Query<BridgeQuery>,
 ) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (StatusCode::UNAUTHORIZED, "Invalid or expired QR token").into_response();
+    }
     let shared = {
         let files = ctx.state.shared_files.read().await;
         files.iter().find(|f| f.id == file_id).cloned()
@@ -265,7 +276,11 @@ fn content_type_for_name(name: &str) -> &'static str {
 async fn preview_shared(
     State(ctx): State<ServerContext>,
     Path(file_id): Path<String>,
+    Query(q): Query<BridgeQuery>,
 ) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
     let shared = {
         let files = ctx.state.shared_files.read().await;
         files.iter().find(|f| f.id == file_id).cloned()
@@ -297,7 +312,11 @@ async fn preview_shared(
 async fn preview_transfer(
     State(ctx): State<ServerContext>,
     Path(transfer_id): Path<String>,
+    Query(q): Query<BridgeQuery>,
 ) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
     let item = {
         let transfers = ctx.state.transfers.read().await;
         transfers.iter().find(|t| t.id == transfer_id).cloned()
@@ -331,8 +350,14 @@ async fn preview_transfer(
 
 async fn handle_mobile_upload(
     State(ctx): State<ServerContext>,
+    Query(q): Query<BridgeQuery>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (StatusCode::UNAUTHORIZED, "Invalid or expired QR token".to_string());
+    }
+    let cid = q.cid.unwrap_or_else(|| "default".to_string());
+    let peer_tag = format!("mobile:{}", cid);
     let save_dir = ctx.state.save_dir.read().await.clone();
     let _ = tokio::fs::create_dir_all(&save_dir).await;
     let mut saved_count = 0usize;
@@ -351,7 +376,7 @@ async fn handle_mobile_upload(
             file_size: 0,
             bytes_transferred: 0,
             peer_name: "Mobile Browser".to_string(),
-            peer_ip: "mobile".to_string(),
+            peer_ip: peer_tag.clone(),
             direction: TransferDirection::Incoming,
             status: TransferStatus::Transferring,
             save_path: None,
@@ -465,7 +490,17 @@ pub async fn emit_transfers(state: &Arc<AppState>, app: &AppHandle) {
     let _ = app.emit("transfers-updated", list);
 }
 
-async fn mobile_portal_html() -> Html<&'static str> {
+async fn mobile_portal_html(
+    State(ctx): State<ServerContext>,
+    Query(q): Query<BridgeQuery>,
+) -> impl IntoResponse {
+    if !is_authorized(&ctx.state, &q).await {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Html("<!doctype html><html><body style='font-family:-apple-system,sans-serif;background:#0f1115;color:#f4f4f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:24px'><div><h2 style='margin:0 0 8px'>Access Denied</h2><p style='opacity:0.65;font-size:14px;margin:0'>Scan the current QR code in LocalFTP to connect.</p></div></body></html>"),
+        )
+            .into_response();
+    }
     Html(
         r#"<!doctype html>
 <html lang="en">
@@ -519,6 +554,13 @@ async fn mobile_portal_html() -> Html<&'static str> {
     const fmt = b => b < 1024 ? b + ' B' : b < 1048576 ? (b/1024).toFixed(1) + ' KB' : (b/1048576).toFixed(1) + ' MB';
     const isImg = name => /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
     const getExt = name => { const p = name.split('.'); return p.length > 1 ? p.pop().slice(0,4).toUpperCase() : 'FILE'; };
+    const token = new URLSearchParams(location.search).get('t') || '';
+    let cid = localStorage.getItem('localftp-cid');
+    if (!cid) {
+      cid = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+      localStorage.setItem('localftp-cid', cid);
+    }
+    const authQ = `t=${encodeURIComponent(token)}&cid=${encodeURIComponent(cid)}`;
     function openPreview(url) {
       document.getElementById('lightboxImg').src = url;
       document.getElementById('lightbox').style.display = 'flex';
@@ -528,27 +570,29 @@ async fn mobile_portal_html() -> Html<&'static str> {
     }).catch(() => {});
     async function loadShared() {
       try {
-        const res = await fetch('/api/shared');
+        const res = await fetch('/api/shared?' + authQ);
+        if (!res.ok) return;
         const items = await res.json();
         const box = document.getElementById('sharedList');
         if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files shared yet.</div>'; return; }
         box.innerHTML = items.map(f => {
-          const previewUrl = `/api/shared/${f.id}/preview`;
+          const previewUrl = `/api/shared/${f.id}/preview?${authQ}`;
           const thumb = isImg(f.name)
             ? `<img class="thumb" src="${previewUrl}" alt="${f.name}" onclick="openPreview('${previewUrl}')" />`
             : `<div class="ext-badge">${getExt(f.name)}</div>`;
-          return `<div class="file-row"><div class="file-left">${thumb}<div class="file-meta"><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div></div><a class="dl" href="/api/shared/${f.id}/download">Download</a></div>`;
+          return `<div class="file-row"><div class="file-left">${thumb}<div class="file-meta"><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div></div><a class="dl" href="/api/shared/${f.id}/download?${authQ}">Download</a></div>`;
         }).join('');
       } catch {}
     }
     async function loadSent() {
       try {
-        const res = await fetch('/api/mobile-sent');
+        const res = await fetch('/api/mobile-sent?' + authQ);
+        if (!res.ok) return;
         const items = await res.json();
         const box = document.getElementById('sentList');
         if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files sent yet.</div>'; return; }
         box.innerHTML = items.map(t => {
-          const previewUrl = `/api/transfers/${t.id}/preview`;
+          const previewUrl = `/api/transfers/${t.id}/preview?${authQ}`;
           const thumb = (t.save_path && isImg(t.file_name))
             ? `<img class="thumb" src="${previewUrl}" alt="${t.file_name}" onclick="openPreview('${previewUrl}')" />`
             : `<div class="ext-badge">${getExt(t.file_name)}</div>`;
@@ -566,7 +610,7 @@ async fn mobile_portal_html() -> Html<&'static str> {
       status.textContent = 'Uploading ' + files.length + ' file(s)...';
       const fd = new FormData();
       for (const f of files) fd.append('file', f, f.name);
-      const res = await fetch('/api/mobile-upload', {
+      const res = await fetch('/api/mobile-upload?' + authQ, {
         method: 'POST',
         body: fd
       });
@@ -577,5 +621,5 @@ async fn mobile_portal_html() -> Html<&'static str> {
   </script>
 </body>
 </html>"#,
-    )
+    ).into_response()
 }

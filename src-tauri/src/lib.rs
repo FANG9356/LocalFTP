@@ -23,7 +23,19 @@ async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, Stri
         ip,
         port: *state.port.read().await,
         save_dir: state.save_dir.read().await.to_string_lossy().to_string(),
+        mobile_token: state.mobile_token.read().await.clone(),
     })
+}
+
+#[tauri::command]
+async fn regenerate_mobile_token(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let new_token = Uuid::new_v4().simple().to_string()[..16].to_string();
+    *state.mobile_token.write().await = new_token.clone();
+    let _ = app.emit("self-updated", ());
+    Ok(new_token)
 }
 
 #[tauri::command]
@@ -282,7 +294,8 @@ pub fn run() {
         .join("LocalFtp");
     let _ = std::fs::create_dir_all(&save_dir);
     let self_id = Uuid::new_v4().to_string();
-    let state = AppState::new(self_id, host_name, save_dir);
+    let mobile_token = Uuid::new_v4().simple().to_string()[..16].to_string();
+    let state = AppState::new(self_id, host_name, save_dir, mobile_token);
 
     let state_for_setup = Arc::clone(&state);
 
@@ -297,6 +310,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_self_info,
+            regenerate_mobile_token,
             get_peers,
             get_transfers,
             respond_to_offer,

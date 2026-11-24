@@ -22,6 +22,7 @@ pub struct SelfInfo {
     pub ip: String,
     pub port: u16,
     pub save_dir: String,
+    pub mobile_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -82,6 +83,7 @@ pub struct AppState {
     pub os_name: String,
     pub port: RwLock<u16>,
     pub save_dir: RwLock<PathBuf>,
+    pub mobile_token: RwLock<String>,
     pub peers: RwLock<HashMap<String, PeerInfo>>,
     pub transfers: RwLock<Vec<TransferItem>>,
     pub pending_approvals: RwLock<HashMap<String, oneshot::Sender<bool>>>,
@@ -89,7 +91,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(self_id: String, device_name: String, save_dir: PathBuf) -> Arc<Self> {
+    pub fn new(self_id: String, device_name: String, save_dir: PathBuf, mobile_token: String) -> Arc<Self> {
         let os_name = match std::env::consts::OS {
             "macos" => "macOS",
             "windows" => "Windows",
@@ -104,6 +106,7 @@ impl AppState {
             os_name,
             port: RwLock::new(0),
             save_dir: RwLock::new(save_dir),
+            mobile_token: RwLock::new(mobile_token),
             peers: RwLock::new(HashMap::new()),
             transfers: RwLock::new(Vec::new()),
             pending_approvals: RwLock::new(HashMap::new()),

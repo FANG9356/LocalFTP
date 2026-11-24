@@ -16,6 +16,7 @@ import {
   Palette,
   QrCode,
   Radio,
+  RefreshCw,
   Send,
   SlidersHorizontal,
   Smartphone,
@@ -70,7 +71,6 @@ export default function App() {
 
   const [isDragging, setIsDragging] = useState(false);
   const [queuedPaths, setQueuedPaths] = useState<string[] | null>(null);
-  const [pendingOffer, setPendingOffer] = useState<TransferItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const [showThemeMenu, setShowThemeMenu] = useState(false);
@@ -116,9 +116,6 @@ export default function App() {
     const unlistenTransfers = listen<TransferItem[]>("transfers-updated", (e) => {
       setTransfers(e.payload);
     });
-    const unlistenOffer = listen<TransferItem>("transfer-offer", (e) => {
-      setPendingOffer(e.payload);
-    });
     const unlistenSelf = listen("self-updated", async () => {
       const info = await invoke<SelfInfo>("get_self_info");
       setSelfInfo(info);
@@ -152,7 +149,6 @@ export default function App() {
     return () => {
       unlistenPeers.then((f) => f());
       unlistenTransfers.then((f) => f());
-      unlistenOffer.then((f) => f());
       unlistenSelf.then((f) => f());
       if (unlistenDrop) unlistenDrop();
     };
@@ -218,11 +214,8 @@ export default function App() {
     }
   };
 
-  const handleRespondOffer = async (accept: boolean) => {
-    if (!pendingOffer) return;
-    await invoke("respond_to_offer", { transferId: pendingOffer.id, accept });
-    setPendingOffer(null);
-    if (accept) setTab("transfers");
+  const handleResetMobileToken = async () => {
+    await invoke("regenerate_mobile_token");
   };
 
   const handleChooseSaveDir = async () => {
@@ -246,7 +239,9 @@ export default function App() {
     (t) => t.status === "transferring" || t.status === "pending"
   ).length;
 
-  const mobileUrl = selfInfo ? `http://${selfInfo.ip}:${selfInfo.port}` : "";
+  const mobileUrl = selfInfo
+    ? `http://${selfInfo.ip}:${selfInfo.port}/?t=${encodeURIComponent(selfInfo.mobile_token)}`
+    : "";
 
   return (
     <div
@@ -593,12 +588,25 @@ export default function App() {
                 Connect your phone to the same Wi-Fi or Hotspot, then scan to send or download
                 files directly in your browser.
               </p>
-              <div
-                className={`mt-3 px-3.5 py-1.5 rounded-xl text-[12px] font-medium tracking-wide ${
-                  isDark ? "bg-white/8 text-zinc-200" : "bg-black/5 text-zinc-700"
-                }`}
-              >
-                {selfInfo ? `Bridge ${formatNodeCode(selfInfo.id)}` : "Starting bridge..."}
+              <div className="mt-3 flex items-center gap-2">
+                <div
+                  className={`px-3.5 py-1.5 rounded-xl text-[12px] font-medium tracking-wide ${
+                    isDark ? "bg-white/8 text-zinc-200" : "bg-black/5 text-zinc-700"
+                  }`}
+                >
+                  {selfInfo ? `Bridge ${formatNodeCode(selfInfo.id)}` : "Starting bridge..."}
+                </div>
+                {selfInfo && (
+                  <button
+                    onClick={handleResetMobileToken}
+                    title="Reset QR Link"
+                    className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
+                      isDark ? "bg-white/8 hover:bg-white/14" : "bg-black/5 hover:bg-black/10"
+                    }`}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -635,7 +643,7 @@ export default function App() {
                     sharedFiles.map((f) => {
                       const thumbUrl =
                         selfInfo && isImageFile(f.name)
-                          ? `http://127.0.0.1:${selfInfo.port}/api/shared/${f.id}/preview`
+                          ? `http://127.0.0.1:${selfInfo.port}/api/shared/${f.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
                           : null;
                       return (
                         <div
@@ -690,17 +698,17 @@ export default function App() {
                   <span className={`text-[11px] ${subtleText}`}>Saved to Downloads</span>
                 </div>
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                  {transfers.filter((t) => t.peer_ip === "mobile" || t.peer_name === "Mobile Browser").length === 0 ? (
+                  {transfers.filter((t) => t.peer_ip.startsWith("mobile") || t.peer_name === "Mobile Browser").length === 0 ? (
                     <div className={`text-[12px] py-3 text-center ${subtleText}`}>
                       Files sent from your phone will appear here
                     </div>
                   ) : (
                     transfers
-                      .filter((t) => t.peer_ip === "mobile" || t.peer_name === "Mobile Browser")
+                      .filter((t) => t.peer_ip.startsWith("mobile") || t.peer_name === "Mobile Browser")
                       .map((t) => {
                         const thumbUrl =
                           selfInfo && t.save_path && isImageFile(t.file_name)
-                            ? `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview`
+                            ? `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
                             : null;
                         return (
                           <div
@@ -778,11 +786,11 @@ export default function App() {
                         <div className="flex items-center gap-3 min-w-0">
                           {selfInfo && t.save_path && isImageFile(t.file_name) ? (
                             <img
-                              src={`http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview`}
+                              src={`http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`}
                               alt={t.file_name}
                               onClick={() =>
                                 setPreviewUrl(
-                                  `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview`
+                                  `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
                                 )
                               }
                               className="h-9 w-9 rounded-xl object-cover shrink-0 cursor-pointer hover:opacity-90"
@@ -917,55 +925,6 @@ export default function App() {
             alt="Preview"
             className="max-w-full max-h-full rounded-2xl shadow-2xl object-contain"
           />
-        </div>
-      )}
-
-      {/* Incoming Transfer Offer Modal */}
-      {pendingOffer && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-6">
-          <div className={`w-full max-w-sm rounded-2xl p-5 backdrop-blur-2xl ${glassCard}`}>
-            <div className="flex items-center gap-3 mb-3">
-              <div
-                className="h-10 w-10 rounded-xl flex items-center justify-center"
-                style={{ background: accent.soft, color: accent.primary }}
-              >
-                <ArrowDownLeft className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="text-[14px] font-semibold">Incoming File</div>
-                <div className={`text-[12px] ${subtleText}`}>
-                  From {pendingOffer.peer_name}
-                </div>
-              </div>
-            </div>
-            <div
-              className={`rounded-xl px-3.5 py-2.5 mb-4 ${
-                isDark ? "bg-white/[0.06]" : "bg-black/[0.04]"
-              }`}
-            >
-              <div className="text-[13px] font-medium truncate">{pendingOffer.file_name}</div>
-              <div className={`text-[11px] ${subtleText}`}>
-                {formatBytes(pendingOffer.file_size)}
-              </div>
-            </div>
-            <div className="flex gap-2.5">
-              <button
-                onClick={() => handleRespondOffer(false)}
-                className={`flex-1 py-2 rounded-xl text-[13px] font-medium cursor-pointer ${
-                  isDark ? "bg-white/10 hover:bg-white/15" : "bg-black/6 hover:bg-black/10"
-                }`}
-              >
-                Decline
-              </button>
-              <button
-                onClick={() => handleRespondOffer(true)}
-                className="flex-1 py-2 rounded-xl text-[13px] font-semibold text-white cursor-pointer"
-                style={{ background: accent.primary }}
-              >
-                Accept
-              </button>
-            </div>
-          </div>
         </div>
       )}
     </div>
