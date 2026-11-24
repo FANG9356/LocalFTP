@@ -193,6 +193,7 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
         mobile_token,
         auto_accept,
         https_enabled: ctx.state.https_enabled,
+        standalone_mode: *ctx.state.standalone_mode.read().await,
     })
 }
 

@@ -1,10 +1,23 @@
 use crate::models::{AppState, PeerInfo};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
+use tokio::net::UdpSocket;
 
 const SERVICE_TYPE: &str = "_localftp._tcp.local.";
+const UDP_DISCOVERY_PORT: u16 = 53318;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UdpBeacon {
+    id: String,
+    name: String,
+    os: String,
+    port: u16,
+    tls: bool,
+}
 
 fn now_secs() -> u64 {
     SystemTime::now()
@@ -27,6 +40,72 @@ fn sanitize_hostname(name: &str) -> String {
 }
 
 pub fn start_discovery(state: Arc<AppState>, app: AppHandle) {
+    // UDP Broadcast fallback discovery alongside mDNS
+    let udp_state = Arc::clone(&state);
+    let udp_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let port = loop {
+            let p = *udp_state.port.read().await;
+            if p > 0 {
+                break p;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+
+        let Ok(sock) = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], UDP_DISCOVERY_PORT))).await
+        else {
+            return;
+        };
+        let _ = sock.set_broadcast(true);
+        let sock = Arc::new(sock);
+
+        let rx_sock = Arc::clone(&sock);
+        let rx_state = Arc::clone(&udp_state);
+        let rx_app = udp_app.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut buf = [0u8; 2048];
+            while let Ok((len, src)) = rx_sock.recv_from(&mut buf).await {
+                let Ok(beacon) = serde_json::from_slice::<UdpBeacon>(&buf[..len]) else {
+                    continue;
+                };
+                if beacon.id.is_empty() || beacon.id == rx_state.self_id {
+                    continue;
+                }
+                let peer = PeerInfo {
+                    id: beacon.id.clone(),
+                    name: beacon.name,
+                    os: beacon.os,
+                    ip: src.ip().to_string(),
+                    port: beacon.port,
+                    https_enabled: beacon.tls,
+                    last_seen: now_secs(),
+                };
+                let mut peers = rx_state.peers.write().await;
+                peers.insert(beacon.id, peer);
+                let list: Vec<PeerInfo> = peers.values().cloned().collect();
+                drop(peers);
+                let _ = rx_app.emit("peers-updated", list);
+            }
+        });
+
+        loop {
+            let name = udp_state.device_name.read().await.clone();
+            let beacon = UdpBeacon {
+                id: udp_state.self_id.clone(),
+                name,
+                os: udp_state.os_name.clone(),
+                port,
+                tls: udp_state.https_enabled,
+            };
+            if let Ok(payload) = serde_json::to_vec(&beacon) {
+                let _ = sock
+                    .send_to(&payload, SocketAddr::from(([255, 255, 255, 255], UDP_DISCOVERY_PORT)))
+                    .await;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+    });
+
     tauri::async_runtime::spawn(async move {
         // Wait briefly until the HTTP server binds its port
         let port = loop {

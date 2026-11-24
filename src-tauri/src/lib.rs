@@ -95,7 +95,112 @@ async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, Stri
         mobile_token: state.mobile_token.read().await.clone(),
         auto_accept: *state.auto_accept.read().await,
         https_enabled: state.https_enabled,
+        standalone_mode: *state.standalone_mode.read().await,
     })
+}
+
+#[tauri::command]
+async fn set_standalone_mode(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let action = if enabled {
+            "StartTetheringAsync()"
+        } else {
+            "StopTetheringAsync()"
+        };
+        let ps_script = format!(
+            "$profile = [Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]::GetInternetConnectionProfile(); \
+             if ($profile -ne $null) {{ \
+               $mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]::CreateFromConnectionProfile($profile); \
+               $mgr.{} | Out-Null \
+             }}",
+            action
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_script])
+            .spawn();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if enabled {
+            let _ = std::process::Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.Sharing-Settings.extension")
+                .spawn();
+        }
+    }
+
+    *state.standalone_mode.write().await = enabled;
+    let _ = app.emit("self-updated", ());
+    Ok(enabled)
+}
+
+#[tauri::command]
+async fn connect_peer_by_ip(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    ip: String,
+    port: Option<u16>,
+) -> Result<PeerInfo, String> {
+    let target_ip = ip.trim().to_string();
+    if target_ip.is_empty() {
+        return Err("IP address cannot be empty".to_string());
+    }
+    let target_port = port.unwrap_or(53317);
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut info_opt: Option<SelfInfo> = None;
+    for scheme in ["https", "http"] {
+        let url = format!("{}://{}:{}/api/info", scheme, target_ip, target_port);
+        if let Ok(resp) = client.get(&url).send().await {
+            if resp.status().is_success() {
+                if let Ok(info) = resp.json::<SelfInfo>().await {
+                    info_opt = Some(info);
+                    break;
+                }
+            }
+        }
+    }
+
+    let info = info_opt.ok_or_else(|| {
+        format!(
+            "Could not reach LocalFTP at {}:{}. Make sure firewall allows port {}.",
+            target_ip, target_port, target_port
+        )
+    })?;
+
+    if info.id == state.self_id {
+        return Err("Cannot connect to this same device".to_string());
+    }
+
+    let peer = PeerInfo {
+        id: info.id.clone(),
+        name: info.name,
+        os: info.os,
+        ip: target_ip,
+        port: target_port,
+        https_enabled: info.https_enabled,
+        last_seen: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+
+    let mut peers = state.peers.write().await;
+    peers.insert(peer.id.clone(), peer.clone());
+    let list: Vec<PeerInfo> = peers.values().cloned().collect();
+    drop(peers);
+    let _ = app.emit("peers-updated", list);
+
+    Ok(peer)
 }
 
 #[tauri::command]
@@ -652,6 +757,8 @@ pub fn run() {
             get_self_info,
             set_auto_accept,
             set_https_enabled,
+            set_standalone_mode,
+            connect_peer_by_ip,
             regenerate_mobile_token,
             get_peers,
             get_transfers,

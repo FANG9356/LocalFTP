@@ -28,6 +28,7 @@ pub struct SelfInfo {
     pub mobile_token: String,
     pub auto_accept: bool,
     pub https_enabled: bool,
+    pub standalone_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,6 +96,7 @@ pub struct AppState {
     pub mobile_token: RwLock<String>,
     pub auto_accept: RwLock<bool>,
     pub https_enabled: bool,
+    pub standalone_mode: RwLock<bool>,
     pub peers: RwLock<HashMap<String, PeerInfo>>,
     pub transfers: RwLock<Vec<TransferItem>>,
     pub pending_approvals: RwLock<HashMap<String, oneshot::Sender<bool>>>,
@@ -128,6 +130,7 @@ impl AppState {
             mobile_token: RwLock::new(mobile_token),
             auto_accept: RwLock::new(false),
             https_enabled,
+            standalone_mode: RwLock::new(false),
             peers: RwLock::new(HashMap::new()),
             transfers: RwLock::new(Vec::new()),
             pending_approvals: RwLock::new(HashMap::new()),

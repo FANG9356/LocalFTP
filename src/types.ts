@@ -20,6 +20,7 @@ export interface SelfInfo {
   mobile_token: string;
   auto_accept: boolean;
   https_enabled: boolean;
+  standalone_mode: boolean;
 }
 
 export type TransferDirection = "incoming" | "outgoing";
