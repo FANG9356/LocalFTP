@@ -24,7 +24,7 @@
         "hiddenTitle": true,
         "dragDropEnabled": true,
         "windowEffects": {
-          "effects": ["underWindowBackground"],
+          "effects": ["underWindowBackground", "mica"],
           "state": "active",
           "radius": 16
         }
@@ -38,7 +38,8 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/icon.ico"
     ]
   }
 }
