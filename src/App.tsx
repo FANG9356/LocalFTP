@@ -448,6 +448,17 @@ export default function App() {
             <SlidersHorizontal className="h-4 w-4" />
           </button>
 
+          {/* Click-outside backdrop for Theme / Settings popovers */}
+          {(showThemeMenu || showSettings) && (
+            <div
+              onClick={() => {
+                setShowThemeMenu(false);
+                setShowSettings(false);
+              }}
+              className="fixed inset-0 z-40"
+            />
+          )}
+
           {/* Accent Picker Popover */}
           {showThemeMenu && (
             <div
@@ -846,10 +857,10 @@ export default function App() {
                 Recent incoming and outgoing local transfers
               </p>
             </div>
-            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+            <div className="flex-1 overflow-y-auto flex flex-col space-y-2.5 pr-1">
               {transfers.length === 0 ? (
                 <div
-                  className={`h-64 flex flex-col items-center justify-center rounded-2xl backdrop-blur-xl ${glassCard}`}
+                  className={`flex-1 min-h-[240px] flex flex-col items-center justify-center rounded-2xl backdrop-blur-xl ${glassCard}`}
                 >
                   <Send className={`h-6 w-6 mb-2 ${subtleText}`} strokeWidth={1.5} />
                   <span className={`text-[13px] ${subtleText}`}>No transfers yet</span>
@@ -948,8 +959,14 @@ export default function App() {
 
       {/* Target Picker Modal after Dropping/Selecting Files */}
       {queuedPaths && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-sm p-6">
-          <div className={`w-full max-w-sm rounded-2xl p-5 backdrop-blur-2xl ${glassCard}`}>
+        <div
+          onClick={() => setQueuedPaths(null)}
+          className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-sm p-6"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-sm rounded-2xl p-5 backdrop-blur-2xl ${glassCard}`}
+          >
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-[15px] font-semibold">
                 Send {queuedPaths.length} file{queuedPaths.length > 1 ? "s" : ""}
