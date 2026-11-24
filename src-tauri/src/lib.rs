@@ -178,6 +178,54 @@ async fn respond_to_offer(
     Ok(())
 }
 
+fn zip_directory_sync(dir: &std::path::Path) -> Result<(PathBuf, String, u64), String> {
+    let folder_name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("folder");
+    let zip_name = format!("{}.zip", folder_name);
+    let temp_zip = std::env::temp_dir().join(format!("localftp-dir-{}.zip", Uuid::new_v4()));
+
+    let out_file = std::fs::File::create(&temp_zip).map_err(|e| e.to_string())?;
+    let mut writer = zip::ZipWriter::new(out_file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored);
+
+    fn add_dir_recursive(
+        base: &std::path::Path,
+        current: &std::path::Path,
+        writer: &mut zip::ZipWriter<std::fs::File>,
+        options: zip::write::SimpleFileOptions,
+    ) -> Result<(), String> {
+        let entries = std::fs::read_dir(current).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.is_empty() || name.starts_with('.') {
+                continue;
+            }
+            let rel = path.strip_prefix(base).map_err(|e| e.to_string())?;
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if path.is_dir() {
+                writer
+                    .add_directory(format!("{}/", rel_str), options)
+                    .map_err(|e| e.to_string())?;
+                add_dir_recursive(base, &path, writer, options)?;
+            } else if path.is_file() {
+                writer.start_file(rel_str, options).map_err(|e| e.to_string())?;
+                let mut src = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+                std::io::copy(&mut src, writer).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    add_dir_recursive(dir, dir, &mut writer, options)?;
+    writer.finish().map_err(|e| e.to_string())?;
+    let size = std::fs::metadata(&temp_zip).map(|m| m.len()).unwrap_or(0);
+    Ok((temp_zip, zip_name, size))
+}
+
 #[tauri::command]
 async fn send_files_to_peer(
     state: State<'_, Arc<AppState>>,
@@ -205,20 +253,30 @@ async fn send_files_to_peer(
         let base_url = format!("{}://{}:{}", scheme, peer.ip, peer.port);
 
         for raw_path in file_paths {
-            let path = PathBuf::from(&raw_path);
-            let Ok(meta) = tokio::fs::metadata(&path).await else {
+            let orig_path = PathBuf::from(&raw_path);
+            let Ok(orig_meta) = tokio::fs::metadata(&orig_path).await else {
                 continue;
             };
-            if !meta.is_file() {
-                continue;
-            }
 
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file")
-                .to_string();
-            let file_size = meta.len();
+            let (path, file_name, file_size, is_temp_zip) = if orig_meta.is_dir() {
+                let dir_clone = orig_path.clone();
+                let Ok(Ok((zip_path, zip_name, zip_size))) =
+                    tokio::task::spawn_blocking(move || zip_directory_sync(&dir_clone)).await
+                else {
+                    continue;
+                };
+                (zip_path, zip_name, zip_size, true)
+            } else if orig_meta.is_file() {
+                let name = orig_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                (orig_path.clone(), name, orig_meta.len(), false)
+            } else {
+                continue;
+            };
+
             let transfer_id = Uuid::new_v4().to_string();
 
             let item = TransferItem {
@@ -344,6 +402,9 @@ async fn send_files_to_peer(
             }
             drop(transfers);
             server::emit_transfers(&shared_state, &app).await;
+            if is_temp_zip {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
         }
     });
 
@@ -359,7 +420,21 @@ async fn share_files_for_mobile(
     for raw_path in file_paths {
         let path = PathBuf::from(&raw_path);
         if let Ok(meta) = tokio::fs::metadata(&path).await {
-            if meta.is_file() && !shared.iter().any(|f| f.path == raw_path) {
+            if meta.is_dir() {
+                let dir_clone = path.clone();
+                if let Ok(Ok((zip_path, zip_name, zip_size))) =
+                    tokio::task::spawn_blocking(move || zip_directory_sync(&dir_clone)).await
+                {
+                    let zip_str = zip_path.to_string_lossy().to_string();
+                    shared.push(SharedFile {
+                        id: Uuid::new_v4().to_string(),
+                        name: zip_name,
+                        size: zip_size,
+                        path: zip_str,
+                        from_watch: false,
+                    });
+                }
+            } else if meta.is_file() && !shared.iter().any(|f| f.path == raw_path) {
                 let name = path
                     .file_name()
                     .and_then(|n| n.to_str())
