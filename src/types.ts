@@ -15,6 +15,7 @@ export interface SelfInfo {
   port: number;
   save_dir: string;
   mobile_token: string;
+  auto_accept: boolean;
 }
 
 export type TransferDirection = "incoming" | "outgoing";

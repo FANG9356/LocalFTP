@@ -89,6 +89,7 @@ export default function App() {
 
   const [isDragging, setIsDragging] = useState(false);
   const [queuedPaths, setQueuedPaths] = useState<string[] | null>(null);
+  const [pendingOffer, setPendingOffer] = useState<TransferItem | null>(null);
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   const [previewText, setPreviewText] = useState<string>("");
 
@@ -135,6 +136,9 @@ export default function App() {
     const unlistenTransfers = listen<TransferItem[]>("transfers-updated", (e) => {
       setTransfers(e.payload);
     });
+    const unlistenOffer = listen<TransferItem>("transfer-offer", (e) => {
+      setPendingOffer(e.payload);
+    });
     const unlistenSelf = listen("self-updated", async () => {
       const info = await invoke<SelfInfo>("get_self_info");
       setSelfInfo(info);
@@ -168,6 +172,7 @@ export default function App() {
     return () => {
       unlistenPeers.then((f) => f());
       unlistenTransfers.then((f) => f());
+      unlistenOffer.then((f) => f());
       unlistenSelf.then((f) => f());
       if (unlistenDrop) unlistenDrop();
     };
@@ -280,6 +285,18 @@ export default function App() {
         <FileIcon className="h-4 w-4" />
       </div>
     );
+  };
+
+  const handleRespondOffer = async (accept: boolean) => {
+    if (!pendingOffer) return;
+    await invoke("respond_to_offer", { transferId: pendingOffer.id, accept });
+    setPendingOffer(null);
+    if (accept) setTab("transfers");
+  };
+
+  const handleToggleAutoAccept = async () => {
+    if (!selfInfo) return;
+    await invoke("set_auto_accept", { enabled: !selfInfo.auto_accept });
   };
 
   const handleResetMobileToken = async () => {
@@ -523,6 +540,33 @@ export default function App() {
                   >
                     <FolderOpen className="h-3.5 w-3.5 shrink-0 opacity-70" />
                     <span className="truncate">{selfInfo?.save_dir || "Downloads"}</span>
+                  </button>
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <div className="text-[12px] font-medium">Auto-Accept Files</div>
+                    <div className={`text-[10px] ${subtleText}`}>
+                      Skip Accept prompt on trusted Wi-Fi
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleToggleAutoAccept}
+                    className={`w-10 h-5.5 rounded-full p-0.5 transition-colors cursor-pointer ${
+                      selfInfo?.auto_accept
+                        ? ""
+                        : isDark
+                        ? "bg-white/15"
+                        : "bg-black/15"
+                    }`}
+                    style={
+                      selfInfo?.auto_accept ? { background: accent.primary } : undefined
+                    }
+                  >
+                    <div
+                      className={`h-4.5 w-4.5 rounded-full bg-white shadow transition-transform ${
+                        selfInfo?.auto_accept ? "translate-x-4.5" : "translate-x-0"
+                      }`}
+                    />
                   </button>
                 </div>
               </div>
@@ -1008,6 +1052,55 @@ export default function App() {
                 {previewText}
               </pre>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Incoming Transfer Offer Modal */}
+      {pendingOffer && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-6">
+          <div className={`w-full max-w-sm rounded-2xl p-5 backdrop-blur-2xl ${glassCard}`}>
+            <div className="flex items-center gap-3 mb-3">
+              <div
+                className="h-10 w-10 rounded-xl flex items-center justify-center"
+                style={{ background: accent.soft, color: accent.primary }}
+              >
+                <ArrowDownLeft className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-[14px] font-semibold">Incoming File</div>
+                <div className={`text-[12px] ${subtleText}`}>
+                  From {pendingOffer.peer_name}
+                </div>
+              </div>
+            </div>
+            <div
+              className={`rounded-xl px-3.5 py-2.5 mb-4 ${
+                isDark ? "bg-white/[0.06]" : "bg-black/[0.04]"
+              }`}
+            >
+              <div className="text-[13px] font-medium truncate">{pendingOffer.file_name}</div>
+              <div className={`text-[11px] ${subtleText}`}>
+                {formatBytes(pendingOffer.file_size)}
+              </div>
+            </div>
+            <div className="flex gap-2.5">
+              <button
+                onClick={() => handleRespondOffer(false)}
+                className={`flex-1 py-2 rounded-xl text-[13px] font-medium cursor-pointer ${
+                  isDark ? "bg-white/10 hover:bg-white/15" : "bg-black/6 hover:bg-black/10"
+                }`}
+              >
+                Decline
+              </button>
+              <button
+                onClick={() => handleRespondOffer(true)}
+                className="flex-1 py-2 rounded-xl text-[13px] font-semibold text-white cursor-pointer"
+                style={{ background: accent.primary }}
+              >
+                Accept
+              </button>
+            </div>
           </div>
         </div>
       )}

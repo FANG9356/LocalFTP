@@ -51,7 +51,19 @@ async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, Stri
         port: *state.port.read().await,
         save_dir: state.save_dir.read().await.to_string_lossy().to_string(),
         mobile_token: state.mobile_token.read().await.clone(),
+        auto_accept: *state.auto_accept.read().await,
     })
+}
+
+#[tauri::command]
+async fn set_auto_accept(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    *state.auto_accept.write().await = enabled;
+    let _ = app.emit("self-updated", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -365,6 +377,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_self_info,
+            set_auto_accept,
             regenerate_mobile_token,
             get_peers,
             get_transfers,

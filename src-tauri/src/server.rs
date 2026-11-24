@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -80,6 +81,7 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
         .map(|i| i.to_string())
         .unwrap_or_else(|_| "127.0.0.1".to_string());
     let mobile_token = ctx.state.mobile_token.read().await.clone();
+    let auto_accept = *ctx.state.auto_accept.read().await;
     Json(SelfInfo {
         id: ctx.state.self_id.clone(),
         name: ctx.state.device_name.read().await.clone(),
@@ -88,6 +90,7 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
         port: *ctx.state.port.read().await,
         save_dir: ctx.state.save_dir.read().await.to_string_lossy().to_string(),
         mobile_token,
+        auto_accept,
     })
 }
 
@@ -95,6 +98,29 @@ async fn handle_offer(
     State(ctx): State<ServerContext>,
     Json(req): Json<OfferRequest>,
 ) -> Json<OfferResponse> {
+    if *ctx.state.auto_accept.read().await {
+        let item = TransferItem {
+            id: req.transfer_id.clone(),
+            file_name: req.file_name.clone(),
+            file_size: req.file_size,
+            bytes_transferred: 0,
+            peer_name: req.sender_name.clone(),
+            peer_ip: String::new(),
+            direction: TransferDirection::Incoming,
+            status: TransferStatus::Transferring,
+            save_path: None,
+            error: None,
+        };
+        {
+            let mut transfers = ctx.state.transfers.write().await;
+            transfers.insert(0, item);
+        }
+        emit_transfers(&ctx.state, &ctx.app).await;
+        return Json(OfferResponse { accepted: true });
+    }
+
+    let (tx, rx) = oneshot::channel::<bool>();
+
     let item = TransferItem {
         id: req.transfer_id.clone(),
         file_name: req.file_name.clone(),
@@ -103,18 +129,37 @@ async fn handle_offer(
         peer_name: req.sender_name.clone(),
         peer_ip: String::new(),
         direction: TransferDirection::Incoming,
-        status: TransferStatus::Transferring,
+        status: TransferStatus::Pending,
         save_path: None,
         error: None,
     };
 
     {
         let mut transfers = ctx.state.transfers.write().await;
-        transfers.insert(0, item);
+        transfers.insert(0, item.clone());
     }
+    {
+        let mut pending = ctx.state.pending_approvals.write().await;
+        pending.insert(req.transfer_id.clone(), tx);
+    }
+
+    let _ = ctx.app.emit("transfer-offer", &item);
     emit_transfers(&ctx.state, &ctx.app).await;
 
-    Json(OfferResponse { accepted: true })
+    let accepted = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or(false);
+
+    if !accepted {
+        let mut pending = ctx.state.pending_approvals.write().await;
+        pending.remove(&req.transfer_id);
+        update_transfer_status(&ctx.state, &req.transfer_id, TransferStatus::Rejected, None).await;
+        emit_transfers(&ctx.state, &ctx.app).await;
+    }
+
+    Json(OfferResponse { accepted })
 }
 
 async fn handle_upload(
