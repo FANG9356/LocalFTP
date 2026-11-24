@@ -374,11 +374,13 @@ async fn send_files_to_peer(
                 }
             });
 
-            let upload_res = client
+            let mut req_builder = client
                 .post(format!("{}/api/upload/{}", base_url, transfer_id))
-                .multipart(form)
-                .send()
-                .await;
+                .multipart(form);
+            if is_temp_zip {
+                req_builder = req_builder.header("x-localftp-folder", "1");
+            }
+            let upload_res = req_builder.send().await;
 
             upload_done.store(true, Ordering::Relaxed);
             let _ = ticker.await;

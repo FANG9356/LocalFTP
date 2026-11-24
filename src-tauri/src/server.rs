@@ -267,8 +267,13 @@ async fn handle_offer(
 async fn handle_upload(
     State(ctx): State<ServerContext>,
     Path(transfer_id): Path<String>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    let is_folder = headers
+        .get("x-localftp-folder")
+        .and_then(|v| v.to_str().ok())
+        == Some("1");
     let save_dir = ctx.state.save_dir.read().await.clone();
     let _ = tokio::fs::create_dir_all(&save_dir).await;
 
@@ -277,7 +282,11 @@ async fn handle_upload(
             .file_name()
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("file-{}", transfer_id));
-        let dest_path = unique_save_path(&save_dir, &raw_name);
+        let dest_path = if is_folder {
+            std::env::temp_dir().join(format!("localftp-recv-{}.zip", transfer_id))
+        } else {
+            unique_save_path(&save_dir, &raw_name)
+        };
 
         let mut file = match tokio::fs::File::create(&dest_path).await {
             Ok(f) => f,
@@ -321,12 +330,62 @@ async fn handle_upload(
         }
 
         let _ = file.flush().await;
+        drop(file);
+
+        let final_path = if is_folder {
+            let folder_base = raw_name.strip_suffix(".zip").unwrap_or(&raw_name).to_string();
+            let target_dir = unique_save_path(&save_dir, &folder_base);
+            let zip_src = dest_path.clone();
+            let extract_dest = target_dir.clone();
+            let extract_ok = tokio::task::spawn_blocking(move || -> Result<(), String> {
+                let f = std::fs::File::open(&zip_src).map_err(|e| e.to_string())?;
+                let mut archive = zip::ZipArchive::new(f).map_err(|e| e.to_string())?;
+                std::fs::create_dir_all(&extract_dest).map_err(|e| e.to_string())?;
+                for i in 0..archive.len() {
+                    let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+                    let Some(enclosed) = entry.enclosed_name() else {
+                        continue;
+                    };
+                    let out_path = extract_dest.join(enclosed);
+                    if entry.is_dir() {
+                        let _ = std::fs::create_dir_all(&out_path);
+                    } else {
+                        if let Some(parent) = out_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Ok(mut out_f) = std::fs::File::create(&out_path) {
+                            let _ = std::io::copy(&mut entry, &mut out_f);
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+            let _ = tokio::fs::remove_file(&dest_path).await;
+            if extract_ok {
+                target_dir
+            } else {
+                dest_path
+            }
+        } else {
+            dest_path
+        };
+
         {
             let mut transfers = ctx.state.transfers.write().await;
             if let Some(t) = transfers.iter_mut().find(|t| t.id == transfer_id) {
                 t.bytes_transferred = written;
                 t.status = TransferStatus::Completed;
-                t.save_path = Some(dest_path.to_string_lossy().to_string());
+                if is_folder {
+                    t.file_name = final_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&raw_name)
+                        .to_string();
+                }
+                t.save_path = Some(final_path.to_string_lossy().to_string());
             }
         }
         emit_transfers(&ctx.state, &ctx.app).await;
