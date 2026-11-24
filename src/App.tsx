@@ -182,13 +182,13 @@ export default function App() {
 
   const shellClass = isDark
     ? "bg-zinc-950/55 text-zinc-100 border-white/10"
-    : "bg-white/65 text-zinc-900 border-black/10";
+    : "bg-white/82 text-zinc-950 border-black/12";
 
   const glassCard = isDark
     ? "bg-white/[0.06] border border-white/12 shadow-[0_8px_24px_rgba(0,0,0,0.22)]"
-    : "bg-white/75 border border-black/8 shadow-[0_8px_24px_rgba(0,0,0,0.06)]";
+    : "bg-white/88 border border-black/10 shadow-[0_8px_24px_rgba(0,0,0,0.08)]";
 
-  const subtleText = isDark ? "text-zinc-400" : "text-zinc-500";
+  const subtleText = isDark ? "text-zinc-400" : "text-zinc-600";
 
   const pickFilesForPeer = async (peer: PeerInfo) => {
     const selected = await openDialog({ multiple: true, directory: false });
@@ -623,7 +623,7 @@ export default function App() {
                   cy="220"
                   r="88"
                   stroke={accent.primary}
-                  strokeOpacity="0.26"
+                  strokeOpacity={isDark ? "0.26" : "0.42"}
                   strokeWidth="1.2"
                 />
                 <circle
@@ -631,7 +631,7 @@ export default function App() {
                   cy="220"
                   r="146"
                   stroke={accent.primary}
-                  strokeOpacity="0.15"
+                  strokeOpacity={isDark ? "0.15" : "0.26"}
                   strokeWidth="1.1"
                 />
                 <circle
@@ -639,7 +639,7 @@ export default function App() {
                   cy="220"
                   r="205"
                   stroke={isDark ? "#ffffff" : "#000000"}
-                  strokeOpacity="0.06"
+                  strokeOpacity={isDark ? "0.06" : "0.14"}
                   strokeWidth="1"
                 />
               </svg>
