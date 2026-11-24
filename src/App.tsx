@@ -299,6 +299,11 @@ export default function App() {
     await invoke("set_auto_accept", { enabled: !selfInfo.auto_accept });
   };
 
+  const handleToggleHttps = async () => {
+    if (!selfInfo) return;
+    await invoke("set_https_enabled", { enabled: !selfInfo.https_enabled });
+  };
+
   const handleResetMobileToken = async () => {
     await invoke("regenerate_mobile_token");
   };
@@ -325,7 +330,7 @@ export default function App() {
   ).length;
 
   const mobileUrl = selfInfo
-    ? `https://${selfInfo.ip}:${selfInfo.port}/?t=${encodeURIComponent(selfInfo.mobile_token)}`
+    ? `${selfInfo.https_enabled ? "https" : "http"}://${selfInfo.ip}:${selfInfo.port}/?t=${encodeURIComponent(selfInfo.mobile_token)}`
     : "";
 
   return (
@@ -578,6 +583,33 @@ export default function App() {
                     <div
                       className={`h-4.5 w-4.5 rounded-full bg-white shadow transition-transform ${
                         selfInfo?.auto_accept ? "translate-x-4.5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <div className="text-[12px] font-medium">HTTPS Encryption</div>
+                    <div className={`text-[10px] ${subtleText}`}>
+                      Encrypt transfers (restarts app)
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleToggleHttps}
+                    className={`w-10 h-5.5 rounded-full p-0.5 transition-colors cursor-pointer ${
+                      selfInfo?.https_enabled
+                        ? ""
+                        : isDark
+                        ? "bg-white/15"
+                        : "bg-black/15"
+                    }`}
+                    style={
+                      selfInfo?.https_enabled ? { background: accent.primary } : undefined
+                    }
+                  >
+                    <div
+                      className={`h-4.5 w-4.5 rounded-full bg-white shadow transition-transform ${
+                        selfInfo?.https_enabled ? "translate-x-4.5" : "translate-x-0"
                       }`}
                     />
                   </button>

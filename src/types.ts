@@ -4,6 +4,7 @@ export interface PeerInfo {
   os: string;
   ip: string;
   port: number;
+  https_enabled: boolean;
   last_seen: number;
 }
 
@@ -17,6 +18,7 @@ export interface SelfInfo {
   save_dir: string;
   mobile_token: string;
   auto_accept: boolean;
+  https_enabled: boolean;
 }
 
 export type TransferDirection = "incoming" | "outgoing";

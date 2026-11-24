@@ -74,17 +74,8 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
                 .expect("Failed to bind LocalFTP HTTPS server"),
         };
 
-        let local_loopback = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-            .await
-            .expect("Failed to bind LocalFTP loopback server");
-
         let tls_port = listener.local_addr().map(|a| a.port()).unwrap_or(DEFAULT_PORT);
-        let loopback_port = local_loopback.local_addr().map(|a| a.port()).unwrap_or(0);
-        *state.port.write().await = tls_port;
-        *state.local_port.write().await = loopback_port;
-        let _ = app.emit("self-updated", ());
-
-        let ctx = ServerContext { state, app };
+        let https_enabled = state.https_enabled;
 
         let router = Router::new()
             .route("/", get(mobile_portal_html))
@@ -99,7 +90,29 @@ pub fn start_server(state: Arc<AppState>, app: AppHandle) {
             .route("/api/mobile-sent", get(list_mobile_sent))
             .route("/api/mobile-upload", post(handle_mobile_upload))
             .layer(DefaultBodyLimit::disable())
-            .with_state(ctx);
+            .with_state(ServerContext {
+                state: Arc::clone(&state),
+                app: app.clone(),
+            });
+
+        if !https_enabled {
+            *state.port.write().await = tls_port;
+            *state.local_port.write().await = tls_port;
+            let _ = app.emit("self-updated", ());
+            if let Err(e) = axum::serve(listener, router).await {
+                eprintln!("LocalFTP HTTP server error: {}", e);
+            }
+            return;
+        }
+
+        let local_loopback = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .expect("Failed to bind LocalFTP loopback server");
+
+        let loopback_port = local_loopback.local_addr().map(|a| a.port()).unwrap_or(0);
+        *state.port.write().await = tls_port;
+        *state.local_port.write().await = loopback_port;
+        let _ = app.emit("self-updated", ());
 
         // Spawn loopback HTTP server strictly for desktop WKWebView local previews
         let loopback_router = router.clone();
@@ -172,6 +185,7 @@ async fn get_info(State(ctx): State<ServerContext>) -> Json<SelfInfo> {
         save_dir: ctx.state.save_dir.read().await.to_string_lossy().to_string(),
         mobile_token,
         auto_accept,
+        https_enabled: ctx.state.https_enabled,
     })
 }
 

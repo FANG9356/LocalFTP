@@ -38,6 +38,34 @@ impl<R: AsyncRead + Unpin> AsyncRead for ProgressReader<R> {
     }
 }
 
+fn settings_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("localftp")
+        .join("settings.json")
+}
+
+fn load_https_setting() -> bool {
+    let path = settings_path();
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("https_enabled").and_then(|b| b.as_bool()))
+        .unwrap_or(true)
+}
+
+fn save_https_setting(enabled: bool) -> Result<(), String> {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::json!({ "https_enabled": enabled });
+    std::fs::write(path, serde_json::to_string_pretty(&json).unwrap_or_default())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, String> {
     let ip = local_ip_address::local_ip()
@@ -53,7 +81,14 @@ async fn get_self_info(state: State<'_, Arc<AppState>>) -> Result<SelfInfo, Stri
         save_dir: state.save_dir.read().await.to_string_lossy().to_string(),
         mobile_token: state.mobile_token.read().await.clone(),
         auto_accept: *state.auto_accept.read().await,
+        https_enabled: state.https_enabled,
     })
+}
+
+#[tauri::command]
+async fn set_https_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    save_https_setting(enabled)?;
+    app.restart();
 }
 
 #[tauri::command]
@@ -136,7 +171,8 @@ async fn send_files_to_peer(
             .danger_accept_invalid_certs(true)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        let base_url = format!("https://{}:{}", peer.ip, peer.port);
+        let scheme = if peer.https_enabled { "https" } else { "http" };
+        let base_url = format!("{}://{}:{}", scheme, peer.ip, peer.port);
 
         for raw_path in file_paths {
             let path = PathBuf::from(&raw_path);
@@ -366,7 +402,8 @@ pub fn run() {
     let _ = std::fs::create_dir_all(&save_dir);
     let self_id = Uuid::new_v4().to_string();
     let mobile_token = Uuid::new_v4().simple().to_string()[..16].to_string();
-    let state = AppState::new(self_id, host_name, save_dir, mobile_token);
+    let https_enabled = load_https_setting();
+    let state = AppState::new(self_id, host_name, save_dir, mobile_token, https_enabled);
 
     let state_for_setup = Arc::clone(&state);
 
@@ -382,6 +419,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_self_info,
             set_auto_accept,
+            set_https_enabled,
             regenerate_mobile_token,
             get_peers,
             get_transfers,

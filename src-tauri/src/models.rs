@@ -11,6 +11,7 @@ pub struct PeerInfo {
     pub os: String,
     pub ip: String,
     pub port: u16,
+    pub https_enabled: bool,
     pub last_seen: u64,
 }
 
@@ -25,6 +26,7 @@ pub struct SelfInfo {
     pub save_dir: String,
     pub mobile_token: String,
     pub auto_accept: bool,
+    pub https_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,6 +90,7 @@ pub struct AppState {
     pub save_dir: RwLock<PathBuf>,
     pub mobile_token: RwLock<String>,
     pub auto_accept: RwLock<bool>,
+    pub https_enabled: bool,
     pub peers: RwLock<HashMap<String, PeerInfo>>,
     pub transfers: RwLock<Vec<TransferItem>>,
     pub pending_approvals: RwLock<HashMap<String, oneshot::Sender<bool>>>,
@@ -95,7 +98,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(self_id: String, device_name: String, save_dir: PathBuf, mobile_token: String) -> Arc<Self> {
+    pub fn new(
+        self_id: String,
+        device_name: String,
+        save_dir: PathBuf,
+        mobile_token: String,
+        https_enabled: bool,
+    ) -> Arc<Self> {
         let os_name = match std::env::consts::OS {
             "macos" => "macOS",
             "windows" => "Windows",
@@ -113,6 +122,7 @@ impl AppState {
             save_dir: RwLock::new(save_dir),
             mobile_token: RwLock::new(mobile_token),
             auto_accept: RwLock::new(false),
+            https_enabled,
             peers: RwLock::new(HashMap::new()),
             transfers: RwLock::new(Vec::new()),
             pending_approvals: RwLock::new(HashMap::new()),

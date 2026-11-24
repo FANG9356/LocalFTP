@@ -49,10 +49,12 @@ pub fn start_discovery(state: Arc<AppState>, app: AppHandle) {
         let instance_name = format!("localftp-{}", &state.self_id[..8]);
         let host_name = format!("{}-{}.local.", sanitize_hostname(&device_name), &state.self_id[..4]);
 
+        let tls_flag = if state.https_enabled { "1" } else { "0" };
         let properties = [
             ("id", state.self_id.as_str()),
             ("name", device_name.as_str()),
             ("os", state.os_name.as_str()),
+            ("tls", tls_flag),
         ];
 
         let ip_str = local_ip_address::local_ip()
@@ -102,6 +104,10 @@ pub fn start_discovery(state: Arc<AppState>, app: AppHandle) {
                             .get_property_val_str("os")
                             .unwrap_or("Unknown")
                             .to_string();
+                        let peer_https = info
+                            .get_property_val_str("tls")
+                            .map(|v| v != "0")
+                            .unwrap_or(true);
 
                         let addrs = info.get_addresses();
                         let ip = addrs
@@ -121,6 +127,7 @@ pub fn start_discovery(state: Arc<AppState>, app: AppHandle) {
                             os: peer_os,
                             ip,
                             port: info.get_port(),
+                            https_enabled: peer_https,
                             last_seen: now_secs(),
                         };
 
