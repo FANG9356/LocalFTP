@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncRead, ReadBuf};
 use uuid::Uuid;
 
@@ -418,6 +418,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .setup(move |app| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
             let handle = app.handle().clone();
             server::start_server(Arc::clone(&state_for_setup), handle.clone());
             discovery::start_discovery(Arc::clone(&state_for_setup), handle);
