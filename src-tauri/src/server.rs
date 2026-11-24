@@ -129,6 +129,7 @@ async fn handle_upload(
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let save_dir = ctx.state.save_dir.read().await.clone();
+    let _ = tokio::fs::create_dir_all(&save_dir).await;
 
     while let Ok(Some(mut field)) = multipart.next_field().await {
         let raw_name = field
@@ -333,6 +334,7 @@ async fn handle_mobile_upload(
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let save_dir = ctx.state.save_dir.read().await.clone();
+    let _ = tokio::fs::create_dir_all(&save_dir).await;
     let mut saved_count = 0usize;
 
     while let Ok(Some(mut field)) = multipart.next_field().await {

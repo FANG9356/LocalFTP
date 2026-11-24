@@ -277,7 +277,10 @@ pub fn run() {
         .trim_end_matches(".local")
         .to_string();
 
-    let save_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
+    let save_dir = dirs::download_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("LocalFtp");
+    let _ = std::fs::create_dir_all(&save_dir);
     let self_id = Uuid::new_v4().to_string();
     let state = AppState::new(self_id, host_name, save_dir);
 
