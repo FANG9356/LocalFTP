@@ -645,18 +645,13 @@ export default function App() {
               </svg>
 
               {peers.length === 0 ? (
-                <div className="relative z-10 flex flex-col items-center text-center max-w-xs">
+                <div className="relative z-10 flex flex-col items-center justify-center">
                   <div
-                    className="h-16 w-16 rounded-2xl flex items-center justify-center mb-3"
+                    className="h-16 w-16 rounded-full flex items-center justify-center"
                     style={{ background: accent.soft, color: accent.primary }}
                   >
                     <Radio className="h-7 w-7 animate-pulse" strokeWidth={1.6} />
                   </div>
-                  <div className="text-[14px] font-medium">Searching nearby...</div>
-                  <p className={`text-[12px] mt-1 leading-relaxed ${subtleText}`}>
-                    Open LocalFTP on another Mac, Windows, or Linux device on the same Wi-Fi or
-                    Hotspot, or use <span className="font-medium">Mobile QR</span> for phones.
-                  </p>
                 </div>
               ) : (
                 <div className="relative z-10 flex flex-wrap items-center justify-center gap-4 max-w-2xl">
@@ -690,25 +685,35 @@ export default function App() {
               )}
             </div>
 
-            {/* Self Identity Pill */}
-            {selfInfo && (
-              <div
-                className={`flex items-center gap-3 px-4 py-2 rounded-2xl backdrop-blur-xl ${glassCard}`}
-              >
-                <div
-                  className="h-8 w-8 rounded-xl flex items-center justify-center"
-                  style={{ background: accent.soft, color: accent.primary }}
-                >
-                  <OsIcon os={selfInfo.os} className="h-4 w-4" />
+            {/* Self Identity Pill & Status */}
+            <div className="flex flex-col items-center gap-2.5">
+              {peers.length === 0 && (
+                <div className="text-center">
+                  <div className="text-[13px] font-medium">Searching nearby...</div>
+                  <p className={`text-[11px] mt-0.5 ${subtleText}`}>
+                    Open LocalFTP on another device on the same Wi-Fi / Hotspot, or use Mobile QR
+                  </p>
                 </div>
-                <div className="text-left">
-                  <div className="text-[12px] font-semibold">{selfInfo.name}</div>
-                  <div className={`text-[11px] ${subtleText}`}>
-                    Visible as {selfInfo.os} • {formatNodeCode(selfInfo.id)}
+              )}
+              {selfInfo && (
+                <div
+                  className={`flex items-center gap-3 px-4 py-2 rounded-2xl backdrop-blur-xl ${glassCard}`}
+                >
+                  <div
+                    className="h-8 w-8 rounded-xl flex items-center justify-center"
+                    style={{ background: accent.soft, color: accent.primary }}
+                  >
+                    <OsIcon os={selfInfo.os} className="h-4 w-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="text-[12px] font-semibold">{selfInfo.name}</div>
+                    <div className={`text-[11px] ${subtleText}`}>
+                      Visible as {selfInfo.os} • {formatNodeCode(selfInfo.id)}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
 
