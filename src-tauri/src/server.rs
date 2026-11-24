@@ -5,7 +5,7 @@ use crate::models::{
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Json},
     routing::{get, post},
     Router,
@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -361,17 +361,95 @@ fn content_type_for_name(name: &str) -> &'static str {
         "webp" => "image/webp",
         "svg" => "image/svg+xml",
         "bmp" => "image/bmp",
-        "mp4" => "video/mp4",
+        "ico" => "image/x-icon",
+        "mp4" | "m4v" => "video/mp4",
         "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" | "aac" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
         "pdf" => "application/pdf",
+        "txt" | "md" | "json" | "csv" | "log" | "xml" | "yaml" | "yml" | "toml" | "ini"
+        | "sh" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "css" | "html" | "env" => {
+            "text/plain; charset=utf-8"
+        }
         _ => "application/octet-stream",
     }
+}
+
+async fn serve_inline_file(
+    path: &str,
+    mime: &'static str,
+    headers: &HeaderMap,
+) -> impl IntoResponse {
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
+        return (StatusCode::NOT_FOUND, "Cannot open file").into_response();
+    };
+    let Ok(meta) = file.metadata().await else {
+        return (StatusCode::NOT_FOUND, "Cannot read file metadata").into_response();
+    };
+    let total = meta.len();
+
+    if let Some(range_val) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
+        if let Some(spec) = range_val.strip_prefix("bytes=") {
+            let mut parts = spec.splitn(2, '-');
+            let start = parts
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let end = parts
+                .next()
+                .and_then(|s| if s.is_empty() { None } else { s.parse::<u64>().ok() })
+                .unwrap_or_else(|| total.saturating_sub(1))
+                .min(total.saturating_sub(1));
+
+            if start <= end && start < total {
+                let len = end - start + 1;
+                if file.seek(std::io::SeekFrom::Start(start)).await.is_ok() {
+                    let stream = ReaderStream::new(file.take(len));
+                    let body = Body::from_stream(stream);
+                    return (
+                        StatusCode::PARTIAL_CONTENT,
+                        [
+                            (header::CONTENT_TYPE, mime.to_string()),
+                            (header::CONTENT_DISPOSITION, "inline".to_string()),
+                            (header::ACCEPT_RANGES, "bytes".to_string()),
+                            (
+                                header::CONTENT_RANGE,
+                                format!("bytes {}-{}/{}", start, end, total),
+                            ),
+                            (header::CONTENT_LENGTH, len.to_string()),
+                        ],
+                        body,
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, mime.to_string()),
+            (header::CONTENT_DISPOSITION, "inline".to_string()),
+            (header::ACCEPT_RANGES, "bytes".to_string()),
+            (header::CONTENT_LENGTH, total.to_string()),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 async fn preview_shared(
     State(ctx): State<ServerContext>,
     Path(file_id): Path<String>,
     Query(q): Query<BridgeQuery>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     if !is_authorized(&ctx.state, &q).await {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -385,29 +463,17 @@ async fn preview_shared(
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
 
-    match tokio::fs::File::open(&shared_file.path).await {
-        Ok(file) => {
-            let stream = ReaderStream::new(file);
-            let body = Body::from_stream(stream);
-            let mime = content_type_for_name(&shared_file.name);
-            (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, mime.to_string()),
-                    (header::CONTENT_DISPOSITION, "inline".to_string()),
-                ],
-                body,
-            )
-                .into_response()
-        }
-        Err(_) => (StatusCode::NOT_FOUND, "Cannot open file").into_response(),
-    }
+    let mime = content_type_for_name(&shared_file.name);
+    serve_inline_file(&shared_file.path, mime, &headers)
+        .await
+        .into_response()
 }
 
 async fn preview_transfer(
     State(ctx): State<ServerContext>,
     Path(transfer_id): Path<String>,
     Query(q): Query<BridgeQuery>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     if !is_authorized(&ctx.state, &q).await {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -424,23 +490,10 @@ async fn preview_transfer(
         return (StatusCode::NOT_FOUND, "No local file path").into_response();
     };
 
-    match tokio::fs::File::open(&path).await {
-        Ok(file) => {
-            let stream = ReaderStream::new(file);
-            let body = Body::from_stream(stream);
-            let mime = content_type_for_name(&transfer.file_name);
-            (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, mime.to_string()),
-                    (header::CONTENT_DISPOSITION, "inline".to_string()),
-                ],
-                body,
-            )
-                .into_response()
-        }
-        Err(_) => (StatusCode::NOT_FOUND, "Cannot open file").into_response(),
-    }
+    let mime = content_type_for_name(&transfer.file_name);
+    serve_inline_file(&path, mime, &headers)
+        .await
+        .into_response()
 }
 
 async fn handle_mobile_upload(
@@ -633,6 +686,7 @@ async fn mobile_portal_html(
     .file-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
     .thumb { width: 50px; height: 50px; border-radius: 10px; object-fit: cover; flex-shrink: 0; background: rgba(128,128,128,0.15); cursor: pointer; }
     .ext-badge { width: 50px; height: 50px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; background: rgba(59,130,246,0.14); color: #60a5fa; flex-shrink: 0; }
+    .ext-badge.clickable { cursor: pointer; }
     .file-meta { min-width: 0; }
     .file-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-size { font-size: 12px; opacity: 0.6; }
@@ -640,8 +694,15 @@ async fn mobile_portal_html(
     #status { font-size: 13px; margin-top: 10px; opacity: 0.8; text-align: center; }
     .prog-wrap { width: 100%; height: 6px; border-radius: 999px; background: rgba(128,128,128,0.22); overflow: hidden; margin-top: 10px; display: none; }
     .prog-fill { height: 100%; width: 0%; background: #3b82f6; border-radius: 999px; transition: width 0.12s ease; }
-    #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.86); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
-    #lightbox img { max-width: 100%; max-height: 88vh; border-radius: 12px; }
+    #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.88); display: none; flex-direction: column; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+    .lb-head { width: 100%; max-width: 820px; display: flex; align-items: center; justify-content: space-between; color: #fff; margin-bottom: 12px; gap: 12px; }
+    .lb-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lb-close { border: none; background: rgba(255,255,255,0.16); color: #fff; border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; flex-shrink: 0; }
+    #lbBody { width: 100%; max-width: 820px; max-height: 82vh; display: flex; align-items: center; justify-content: center; }
+    #lbBody img, #lbBody video { max-width: 100%; max-height: 80vh; border-radius: 12px; }
+    #lbBody audio { width: 100%; max-width: 440px; }
+    #lbBody iframe { width: 100%; height: 78vh; border: none; border-radius: 12px; background: #fff; }
+    #lbBody pre { width: 100%; max-height: 78vh; overflow: auto; background: #18181b; color: #e4e4e7; padding: 16px; border-radius: 12px; font-size: 12px; line-height: 1.5; margin: 0; white-space: pre-wrap; word-break: break-word; }
   </style>
 </head>
 <body>
@@ -674,11 +735,22 @@ async fn mobile_portal_html(
       </div>
     </div>
   </div>
-  <div id="lightbox" onclick="this.style.display='none'"><img id="lightboxImg" alt="Preview" /></div>
+  <div id="lightbox" onclick="closePreview(event)">
+    <div class="lb-head" onclick="event.stopPropagation()">
+      <div id="lbTitle" class="lb-title">Preview</div>
+      <button class="lb-close" onclick="closePreview()">Close</button>
+    </div>
+    <div id="lbBody" onclick="event.stopPropagation()"></div>
+  </div>
   <script>
     const fmt = b => b < 1024 ? b + ' B' : b < 1048576 ? (b/1024).toFixed(1) + ' KB' : (b/1048576).toFixed(1) + ' MB';
-    const isImg = name => /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
+    const isImg = name => /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(name);
+    const isVid = name => /\.(mp4|mov|webm|m4v)$/i.test(name);
+    const isAud = name => /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(name);
+    const isPdf = name => /\.pdf$/i.test(name);
+    const isTxt = name => /\.(txt|md|json|csv|log|xml|yaml|yml|toml|ini|sh|rs|ts|tsx|js|jsx|py|css|html|env)$/i.test(name);
     const getExt = name => { const p = name.split('.'); return p.length > 1 ? p.pop().slice(0,4).toUpperCase() : 'FILE'; };
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const token = new URLSearchParams(location.search).get('t') || '';
     let cid = localStorage.getItem('localftp-cid');
     if (!cid) {
@@ -686,9 +758,43 @@ async fn mobile_portal_html(
       localStorage.setItem('localftp-cid', cid);
     }
     const authQ = `t=${encodeURIComponent(token)}&cid=${encodeURIComponent(cid)}`;
-    function openPreview(url) {
-      document.getElementById('lightboxImg').src = url;
-      document.getElementById('lightbox').style.display = 'flex';
+    function closePreview(ev) {
+      if (ev && ev.target !== document.getElementById('lightbox')) return;
+      document.getElementById('lbBody').innerHTML = '';
+      document.getElementById('lightbox').style.display = 'none';
+    }
+    async function openPreview(url, name) {
+      const box = document.getElementById('lightbox');
+      const body = document.getElementById('lbBody');
+      document.getElementById('lbTitle').textContent = name || 'Preview';
+      if (isImg(name)) {
+        body.innerHTML = `<img src="${url}" alt="${esc(name)}" />`;
+      } else if (isVid(name)) {
+        body.innerHTML = `<video src="${url}" controls playsinline autoplay></video>`;
+      } else if (isAud(name)) {
+        body.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
+      } else if (isPdf(name)) {
+        body.innerHTML = `<iframe src="${url}"></iframe>`;
+      } else if (isTxt(name)) {
+        body.innerHTML = `<pre>Loading...</pre>`;
+        box.style.display = 'flex';
+        try {
+          const text = await (await fetch(url)).text();
+          body.innerHTML = `<pre>${esc(text.slice(0, 100000))}</pre>`;
+        } catch {
+          body.innerHTML = `<pre>Unable to load preview.</pre>`;
+        }
+        return;
+      }
+      box.style.display = 'flex';
+    }
+    function renderThumb(name, previewUrl, canPreview) {
+      if (!canPreview) return `<div class="ext-badge">${getExt(name)}</div>`;
+      if (isImg(name)) return `<img class="thumb" src="${previewUrl}" alt="${esc(name)}" onclick="openPreview('${previewUrl}', '${esc(name)}')" />`;
+      if (isVid(name) || isAud(name) || isPdf(name) || isTxt(name)) {
+        return `<div class="ext-badge clickable" onclick="openPreview('${previewUrl}', '${esc(name)}')">${getExt(name)}</div>`;
+      }
+      return `<div class="ext-badge">${getExt(name)}</div>`;
     }
     const selectedIds = new Set();
     let currentShared = [];
@@ -739,10 +845,8 @@ async fn mobile_portal_html(
         box.innerHTML = items.map(f => {
           const previewUrl = `/api/shared/${f.id}/preview?${authQ}`;
           const checked = selectedIds.has(f.id) ? 'checked' : '';
-          const thumb = isImg(f.name)
-            ? `<img class="thumb" src="${previewUrl}" alt="${f.name}" onclick="openPreview('${previewUrl}')" />`
-            : `<div class="ext-badge">${getExt(f.name)}</div>`;
-          return `<div class="file-row"><div class="file-left"><input type="checkbox" class="chk" ${checked} onchange="toggleSelect('${f.id}', this.checked)" />${thumb}<div class="file-meta"><div class="file-name">${f.name}</div><div class="file-size">${fmt(f.size)}</div></div></div><a class="dl" href="/api/shared/${f.id}/download?${authQ}">Download</a></div>`;
+          const thumb = renderThumb(f.name, previewUrl, true);
+          return `<div class="file-row"><div class="file-left"><input type="checkbox" class="chk" ${checked} onchange="toggleSelect('${f.id}', this.checked)" />${thumb}<div class="file-meta"><div class="file-name">${esc(f.name)}</div><div class="file-size">${fmt(f.size)}</div></div></div><a class="dl" href="/api/shared/${f.id}/download?${authQ}">Download</a></div>`;
         }).join('');
       } catch {}
     }
@@ -755,10 +859,8 @@ async fn mobile_portal_html(
         if (!items.length) { box.innerHTML = '<div style="font-size:13px;opacity:0.6">No files sent yet.</div>'; return; }
         box.innerHTML = items.map(t => {
           const previewUrl = `/api/transfers/${t.id}/preview?${authQ}`;
-          const thumb = (t.save_path && isImg(t.file_name))
-            ? `<img class="thumb" src="${previewUrl}" alt="${t.file_name}" onclick="openPreview('${previewUrl}')" />`
-            : `<div class="ext-badge">${getExt(t.file_name)}</div>`;
-          return `<div class="file-row"><div class="file-left">${thumb}<div class="file-meta"><div class="file-name">${t.file_name}</div><div class="file-size">${fmt(t.file_size)}</div></div></div><span class="sent-badge">${t.status}</span></div>`;
+          const thumb = renderThumb(t.file_name, previewUrl, !!t.save_path);
+          return `<div class="file-row"><div class="file-left">${thumb}<div class="file-meta"><div class="file-name">${esc(t.file_name)}</div><div class="file-size">${fmt(t.file_size)}</div></div></div><span class="sent-badge">${t.status}</span></div>`;
         }).join('');
       } catch {}
     }

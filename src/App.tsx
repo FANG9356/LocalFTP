@@ -9,10 +9,13 @@ import {
   ArrowUpRight,
   Check,
   File as FileIcon,
+  FileText,
+  Film,
   FolderOpen,
   Laptop,
   Monitor,
   Moon,
+  Music,
   Palette,
   QrCode,
   Radio,
@@ -37,8 +40,23 @@ import type {
 
 type TabKey = "nearby" | "mobile" | "transfers";
 
-function isImageFile(name: string): boolean {
-  return /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(name);
+type PreviewKind = "image" | "video" | "audio" | "pdf" | "text";
+
+function getPreviewKind(name: string): PreviewKind | null {
+  if (/\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(name)) return "image";
+  if (/\.(mp4|mov|webm|m4v)$/i.test(name)) return "video";
+  if (/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(name)) return "audio";
+  if (/\.pdf$/i.test(name)) return "pdf";
+  if (/\.(txt|md|json|csv|log|xml|yaml|yml|toml|ini|sh|rs|ts|tsx|js|jsx|py|css|html|env)$/i.test(name)) {
+    return "text";
+  }
+  return null;
+}
+
+interface PreviewTarget {
+  url: string;
+  name: string;
+  kind: PreviewKind;
 }
 
 function formatNodeCode(id: string): string {
@@ -71,7 +89,8 @@ export default function App() {
 
   const [isDragging, setIsDragging] = useState(false);
   const [queuedPaths, setQueuedPaths] = useState<string[] | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+  const [previewText, setPreviewText] = useState<string>("");
 
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -212,6 +231,55 @@ export default function App() {
       });
       setSharedFiles(updated);
     }
+  };
+
+  const openFilePreview = async (url: string, name: string, kind: PreviewKind) => {
+    setPreviewTarget({ url, name, kind });
+    if (kind === "text") {
+      setPreviewText("Loading...");
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        setPreviewText(text.slice(0, 100000));
+      } catch {
+        setPreviewText("Unable to load preview.");
+      }
+    }
+  };
+
+  const renderPreviewThumb = (url: string | null, name: string, sizeClass = "h-9 w-9") => {
+    const kind = url ? getPreviewKind(name) : null;
+    if (url && kind === "image") {
+      return (
+        <img
+          src={url}
+          alt={name}
+          onClick={() => openFilePreview(url, name, "image")}
+          className={`${sizeClass} rounded-lg object-cover shrink-0 cursor-pointer hover:opacity-90`}
+        />
+      );
+    }
+    if (url && kind) {
+      const Icon = kind === "video" ? Film : kind === "audio" ? Music : FileText;
+      return (
+        <button
+          onClick={() => openFilePreview(url, name, kind)}
+          title={`Preview ${name}`}
+          className={`${sizeClass} rounded-lg flex items-center justify-center shrink-0 cursor-pointer hover:opacity-85 transition-opacity`}
+          style={{ background: accent.soft, color: accent.primary }}
+        >
+          <Icon className="h-4 w-4" />
+        </button>
+      );
+    }
+    return (
+      <div
+        className={`${sizeClass} rounded-lg flex items-center justify-center shrink-0`}
+        style={{ background: accent.soft, color: accent.primary }}
+      >
+        <FileIcon className="h-4 w-4" />
+      </div>
+    );
   };
 
   const handleResetMobileToken = async () => {
@@ -641,10 +709,9 @@ export default function App() {
                     </div>
                   ) : (
                     sharedFiles.map((f) => {
-                      const thumbUrl =
-                        selfInfo && isImageFile(f.name)
-                          ? `http://127.0.0.1:${selfInfo.port}/api/shared/${f.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
-                          : null;
+                      const url = selfInfo
+                        ? `http://127.0.0.1:${selfInfo.port}/api/shared/${f.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
+                        : null;
                       return (
                         <div
                           key={f.id}
@@ -653,21 +720,7 @@ export default function App() {
                           }`}
                         >
                           <div className="flex items-center gap-2.5 min-w-0 pr-3">
-                            {thumbUrl ? (
-                              <img
-                                src={thumbUrl}
-                                alt={f.name}
-                                onClick={() => setPreviewUrl(thumbUrl)}
-                                className="h-9 w-9 rounded-lg object-cover shrink-0 cursor-pointer hover:opacity-90"
-                              />
-                            ) : (
-                              <div
-                                className="h-9 w-9 rounded-lg flex items-center justify-center shrink-0"
-                                style={{ background: accent.soft, color: accent.primary }}
-                              >
-                                <FileIcon className="h-4 w-4" />
-                              </div>
-                            )}
+                            {renderPreviewThumb(url, f.name, "h-9 w-9")}
                             <div className="min-w-0">
                               <div className="text-[13px] font-medium truncate">{f.name}</div>
                               <div className={`text-[11px] ${subtleText}`}>
@@ -706,8 +759,8 @@ export default function App() {
                     transfers
                       .filter((t) => t.peer_ip.startsWith("mobile") || t.peer_name === "Mobile Browser")
                       .map((t) => {
-                        const thumbUrl =
-                          selfInfo && t.save_path && isImageFile(t.file_name)
+                        const url =
+                          selfInfo && t.save_path
                             ? `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
                             : null;
                         return (
@@ -718,19 +771,7 @@ export default function App() {
                             }`}
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
-                              {thumbUrl ? (
-                                <img
-                                  src={thumbUrl}
-                                  alt={t.file_name}
-                                  onClick={() => setPreviewUrl(thumbUrl)}
-                                  className="h-8 w-8 rounded-lg object-cover shrink-0 cursor-pointer hover:opacity-90"
-                                />
-                              ) : (
-                                <ArrowDownLeft
-                                  className="h-3.5 w-3.5 shrink-0"
-                                  style={{ color: accent.primary }}
-                                />
-                              )}
+                              {renderPreviewThumb(url, t.file_name, "h-8 w-8")}
                               <div className="min-w-0">
                                 <div className="text-[12px] font-medium truncate">
                                   {t.file_name}
@@ -784,17 +825,12 @@ export default function App() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0">
-                          {selfInfo && t.save_path && isImageFile(t.file_name) ? (
-                            <img
-                              src={`http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`}
-                              alt={t.file_name}
-                              onClick={() =>
-                                setPreviewUrl(
-                                  `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`
-                                )
-                              }
-                              className="h-9 w-9 rounded-xl object-cover shrink-0 cursor-pointer hover:opacity-90"
-                            />
+                          {selfInfo && t.save_path && getPreviewKind(t.file_name) ? (
+                            renderPreviewThumb(
+                              `http://127.0.0.1:${selfInfo.port}/api/transfers/${t.id}/preview?t=${encodeURIComponent(selfInfo.mobile_token)}`,
+                              t.file_name,
+                              "h-9 w-9"
+                            )
                           ) : (
                             <div
                               className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0"
@@ -914,17 +950,65 @@ export default function App() {
         </div>
       )}
 
-      {/* Image Preview Lightbox */}
-      {previewUrl && (
+      {/* Universal File Preview Modal */}
+      {previewTarget && (
         <div
-          onClick={() => setPreviewUrl(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-8 cursor-pointer"
+          onClick={() => setPreviewTarget(null)}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md p-6"
         >
-          <img
-            src={previewUrl}
-            alt="Preview"
-            className="max-w-full max-h-full rounded-2xl shadow-2xl object-contain"
-          />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-3xl flex items-center justify-between mb-3 text-white gap-3"
+          >
+            <span className="text-[13px] font-semibold truncate">{previewTarget.name}</span>
+            <button
+              onClick={() => setPreviewTarget(null)}
+              className="px-3 py-1 rounded-full bg-white/15 hover:bg-white/25 text-[12px] font-medium cursor-pointer shrink-0"
+            >
+              Close
+            </button>
+          </div>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-3xl max-h-[80vh] flex items-center justify-center"
+          >
+            {previewTarget.kind === "image" && (
+              <img
+                src={previewTarget.url}
+                alt={previewTarget.name}
+                className="max-w-full max-h-[78vh] rounded-2xl shadow-2xl object-contain"
+              />
+            )}
+            {previewTarget.kind === "video" && (
+              <video
+                src={previewTarget.url}
+                controls
+                autoPlay
+                className="max-w-full max-h-[78vh] rounded-2xl shadow-2xl"
+              />
+            )}
+            {previewTarget.kind === "audio" && (
+              <div className="w-full max-w-md p-6 rounded-2xl bg-zinc-900/90 border border-white/15 flex flex-col items-center gap-4">
+                <Music className="h-10 w-10 text-white/80" />
+                <div className="text-[13px] text-white font-medium truncate max-w-full">
+                  {previewTarget.name}
+                </div>
+                <audio src={previewTarget.url} controls autoPlay className="w-full" />
+              </div>
+            )}
+            {previewTarget.kind === "pdf" && (
+              <iframe
+                src={previewTarget.url}
+                title={previewTarget.name}
+                className="w-full h-[76vh] rounded-2xl bg-white border-0"
+              />
+            )}
+            {previewTarget.kind === "text" && (
+              <pre className="w-full max-h-[76vh] overflow-auto rounded-2xl bg-zinc-900 text-zinc-100 p-4 text-[12px] leading-relaxed border border-white/15 whitespace-pre-wrap break-words">
+                {previewText}
+              </pre>
+            )}
+          </div>
         </div>
       )}
     </div>
