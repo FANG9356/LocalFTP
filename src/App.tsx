@@ -332,11 +332,11 @@ export default function App() {
     <div
       className={`relative h-screen w-screen flex flex-col overflow-hidden transition-colors duration-300 ${shellClass}`}
     >
-      {/* Ambient theme glow (radial-gradient avoids heavy GPU Gaussian blur on startup) */}
+      {/* Ambient theme glow */}
       <div
-        className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 h-72 w-[560px] rounded-full opacity-25 transition-colors duration-500"
+        className="pointer-events-none absolute inset-0 opacity-22 transition-all duration-500"
         style={{
-          background: `radial-gradient(circle, ${accent.primary} 0%, transparent 70%)`,
+          background: `radial-gradient(ellipse 70% 48% at 50% 0%, ${accent.primary} 0%, transparent 72%)`,
         }}
       />
 
