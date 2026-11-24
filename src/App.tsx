@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -111,6 +112,9 @@ export default function App() {
   }, [accentId]);
 
   useEffect(() => {
+    requestAnimationFrame(() => {
+      getCurrentWindow().show().catch(() => {});
+    });
     const loadInitial = async () => {
       try {
         const [info, initialPeers, initialTransfers, initialShared] = await Promise.all([
@@ -614,16 +618,16 @@ export default function App() {
             <div className="relative flex-1 w-full flex items-center justify-center my-4">
               {/* Concentric Radar Rings */}
               <div
-                className="pointer-events-none absolute h-56 w-56 rounded-full border radar-ring"
+                className="pointer-events-none absolute h-56 w-56 rounded-full border opacity-35"
                 style={{ borderColor: accent.ring }}
               />
               <div
-                className="pointer-events-none absolute h-84 w-84 rounded-full border radar-ring-delay"
+                className="pointer-events-none absolute h-84 w-84 rounded-full border opacity-20"
                 style={{ borderColor: accent.ring }}
               />
               <div
                 className={`pointer-events-none absolute h-[420px] w-[420px] rounded-full border ${
-                  isDark ? "border-white/[0.05]" : "border-black/[0.05]"
+                  isDark ? "border-white/[0.06]" : "border-black/[0.06]"
                 }`}
               />
 
