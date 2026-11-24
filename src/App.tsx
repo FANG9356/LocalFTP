@@ -96,6 +96,9 @@ export default function App() {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editingName, setEditingName] = useState("");
+  const [bootProgress, setBootProgress] = useState(15);
+  const [bootStep, setBootStep] = useState("Initializing local node...");
+  const [isReady, setIsReady] = useState(false);
 
   const accent: AccentTheme = useMemo(
     () => ACCENT_THEMES.find((t) => t.id === accentId) || ACCENT_THEMES[0],
@@ -111,21 +114,44 @@ export default function App() {
   }, [accentId]);
 
   useEffect(() => {
+    let cancelled = false;
     const loadInitial = async () => {
       try {
-        const [info, initialPeers, initialTransfers, initialShared] = await Promise.all([
-          invoke<SelfInfo>("get_self_info"),
+        setBootProgress(30);
+        setBootStep("Starting secure HTTPS server...");
+
+        let info = await invoke<SelfInfo>("get_self_info");
+        for (let i = 0; i < 20 && (info.port === 0 || info.local_port === 0); i++) {
+          if (cancelled) return;
+          await new Promise((r) => setTimeout(r, 80));
+          info = await invoke<SelfInfo>("get_self_info");
+        }
+        if (cancelled) return;
+
+        setSelfInfo(info);
+        setEditingName(info.name);
+        setBootProgress(70);
+        setBootStep("Discovering nearby devices...");
+
+        const [initialPeers, initialTransfers, initialShared] = await Promise.all([
           invoke<PeerInfo[]>("get_peers"),
           invoke<TransferItem[]>("get_transfers"),
           invoke<SharedFile[]>("get_shared_files"),
         ]);
-        setSelfInfo(info);
-        setEditingName(info.name);
+        if (cancelled) return;
+
         setPeers(initialPeers);
         setTransfers(initialTransfers);
         setSharedFiles(initialShared);
+        setBootProgress(100);
+        setBootStep("Ready");
+
+        setTimeout(() => {
+          if (!cancelled) setIsReady(true);
+        }, 260);
       } catch (err) {
         console.error("Failed to load initial state:", err);
+        if (!cancelled) setIsReady(true);
       }
     };
     loadInitial();
@@ -175,6 +201,7 @@ export default function App() {
       unlistenOffer.then((f) => f());
       unlistenSelf.then((f) => f());
       if (unlistenDrop) unlistenDrop();
+      cancelled = true;
     };
   }, [tab]);
 
@@ -590,6 +617,31 @@ export default function App() {
 
       {/* Main Content */}
       <main className="relative z-10 flex-1 overflow-y-auto p-6">
+        {!isReady ? (
+          <div className="h-full flex flex-col items-center justify-center">
+            <div className="w-full max-w-xs flex flex-col items-center text-center">
+              <div
+                className="h-14 w-14 rounded-2xl flex items-center justify-center text-white shadow-md mb-4"
+                style={{ background: accent.primary }}
+              >
+                <Radio className="h-7 w-7" strokeWidth={1.8} />
+              </div>
+              <div className="text-[16px] font-semibold tracking-tight">LocalFTP</div>
+              <div className={`text-[12px] mt-1 mb-5 ${subtleText}`}>{bootStep}</div>
+              <div
+                className={`w-full h-1.5 rounded-full overflow-hidden ${
+                  isDark ? "bg-white/10" : "bg-black/10"
+                }`}
+              >
+                <div
+                  className="h-full rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${bootProgress}%`, background: accent.primary }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+        <>
         {tab === "nearby" && (
           <div className="h-full flex flex-col items-center justify-between">
             {/* Top helper bar */}
@@ -975,6 +1027,8 @@ export default function App() {
               )}
             </div>
           </div>
+        )}
+        </>
         )}
       </main>
 
